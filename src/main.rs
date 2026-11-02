@@ -142,6 +142,27 @@ fn real_main() {
             }
             println!("{n} samples; Rust differs from Math: sin {} cos {} tan {}", bad[0], bad[1], bad[2]);
         }
+        // states <cases.edn> <line>: the state after each step count 1..max, as `bisect` writes it
+        Some("states") => {
+            let cases = load(args.get(2).expect("cases.edn"));
+            let c = &cases[args.get(3).expect("line").parse::<usize>().unwrap() - 1];
+            for k in 1..=c.max {
+                let mut m = Machine::new(c.program.clone(), c.inputs.clone());
+                m.run(k);
+                let ex: Vec<String> = m.exec.iter().map(fmt::pr_str).collect();
+                let fl: Vec<String> = m.float.iter().map(|v| fmt::pr_double(*v)).collect();
+                let ch: Vec<String> = m.chr.iter().map(|c| fmt::pr_char(*c)).collect();
+                println!(
+                    "{k} [[{}] [{}] [{}] [{}] [{}] {}]",
+                    m.int.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "),
+                    m.boolean.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "),
+                    fl.join(" "),
+                    ch.join(" "),
+                    ex.join(" "),
+                    fmt::pr_string(&m.print)
+                );
+            }
+        }
         Some("names") => {
             for n in push3_fast::all_names() {
                 println!("{n}");
