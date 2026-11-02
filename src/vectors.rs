@@ -316,8 +316,11 @@ mod tests {
     }
 
     #[test]
-    fn iterate_runs_body_per_element() {
-        let m = run("([1 2 3] :vector_integer_iterate :integer_inc)");
-        assert_eq!(m.int, vec![2, 3, 4]);
+    fn iterate_consumes_the_next_exec_item_each_round() {
+        // oracle quirk: the body is not re-pushed for the recursion, the next iterate takes
+        // whatever follows it on the EXEC stack
+        let m = run("([1 2 3] :vector_integer_iterate :integer_inc :integer_inc)");
+        assert_eq!(m.int, vec![2, 3]);
+        assert_eq!(vecs(&m), vec![vec![3]]);
     }
 }
