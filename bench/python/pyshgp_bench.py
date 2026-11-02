@@ -6,13 +6,17 @@ from pyshgp.push.config import PushConfig
 from pyshgp.push.instruction_set import InstructionSet
 from pyshgp.push.interpreter import PushInterpreter
 from pyshgp.push.program import Program, ProgramSignature
-from pyshgp.push.atoms import CodeBlock
+from pyshgp.push.atoms import CodeBlock, InstructionMeta, Literal
 
 
 def run_once(interp, n):
-    code = interp.untyped_to_typed([0, 0, n - 1, "exec_do_range", ["int_pop", 1, "int_add"]])
+    int_type = interp.type_library["int"]
+    lit = lambda v: Literal(value=v, push_type=int_type)
+    ins = lambda name, blocks=0: InstructionMeta(name=name, code_blocks=blocks)
+    code = CodeBlock([lit(0), lit(0), lit(n - 1), ins("exec_do_range", 1),
+                      CodeBlock([ins("int_pop"), lit(1), ins("int_add")])])
     cfg = PushConfig(step_limit=10**10, runtime_limit=3600)
-    prog = Program(CodeBlock(code), ProgramSignature(arity=0, output_stacks=["int"], push_config=cfg))
+    prog = Program(code=code, signature=ProgramSignature(arity=0, output_stacks=["int"], push_config=cfg))
     t = time.perf_counter()
     out = interp.run(prog, [])
     return time.perf_counter() - t, out
