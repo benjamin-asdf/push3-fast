@@ -3,7 +3,7 @@
 ## instruction; the final counter must equal N. One TSV line per implementation:
 ##   implementation  workload  iterations  best-seconds  result
 ## usage: bench/run-all.sh [out.tsv]       env: P3F=<push3-fast checkout> CLJ_PUSH3=<clj-push3 base> CLJ_PUSH3_PERF=<perf branch>
-##        PYSHGP_PY=<python 3.9 with pyshgp> CPUSHPUSH=<dir of a built CPushPush> REPS=5
+##        PYSHGP_PY=<python 3.9 with pyshgp> CPUSHPUSH=<dir of a built CPushPush> CLOJUSH=<Clojush checkout> REPS=5
 set -u
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -33,6 +33,7 @@ if [ -n "$CLJ_PUSH3_PERF" ]; then
 fi
 (cd bench/clj && clojure -J-Xmx2g -M:propeller propeller_bench.clj $N $REPS 2>/dev/null) | add
 (cd bench/pushr && cargo build --release 2>&1 | grep -E "^error" || true; ./target/release/bench-pushr $N $REPS) | add
+[ -n "${CLOJUSH:-}" ] && { cp bench/clojush/clojush_bench.clj "$CLOJUSH/src/clojush_bench.clj"; (cd "$CLOJUSH" && JVM_OPTS=-Xmx2g lein run -m clojush-bench $N $REPS 2>/dev/null) | add; }
 [ -n "${PYSHGP_PY:-}" ] && "$PYSHGP_PY" bench/python/pyshgp_bench.py 20000 $REPS | add
 [ -n "${CPUSHPUSH:-}" ] && LD_LIBRARY_PATH="$CPUSHPUSH/src/.libs" python3 bench/cpp/cpushpush_bench.py "$CPUSHPUSH/src/.libs/runpush" 50000 $REPS | add
 echo "$OUT"
