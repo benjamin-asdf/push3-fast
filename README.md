@@ -13,15 +13,61 @@ final states.
 
 | | |
 |---|---|
-| Stacks | EXEC, INTEGER, BOOLEAN, FLOAT, CHAR, PRINT output, output registers `c0`..`c7` |
-| Instructions | 170 (the stack family `dup`, `pop`, `swap`, `rot`, `yank`, `shove`, `print`, ... on five stacks, integer and float arithmetic, comparisons, boolean logic, char predicates, `exec_if/when/while/do_while/k/s/y/=`, `exec_do*range/count/times`), plus `in1`..`in8`, named inputs |
-| Not yet | strings, vectors, CODE, NAME (`string_*` and `vector_integer_*` are 90 of the 258 instructions the Propeller problems use) |
-| Propeller problems | 11 of 31 run completely: bouncing-balls, dice-game, gcd, snow-day, smallest, number-io, integer-regression, nguyen-f1, nguyen-f5, mul3, mul4 |
-| Differential test | 29,995 random programs, plus about 100,000 runs on those 11 problems' own alphabets and training cases: 0 mismatches against the oracle |
+| Stacks | EXEC, INTEGER, BOOLEAN, FLOAT, CHAR, STRING, integer vectors, PRINT output, output registers `c0`..`c7` |
+| Instructions | 265 names: the stack family (`dup`, `pop`, `swap`, `rot`, `yank`, `shove`, `print`, ...) on seven stacks, 54 string, 37 integer-vector, 36 float, 33 integer, 29 char, 26 boolean and 25 exec instructions, `in1`..`in8` and named inputs, `set_c0`..`set_c7` / `c0`..`c7`, `print_newline` |
+| Not modelled | CODE, NAME, vectors of floats/strings/booleans/chars (values of those types are carried but nothing reads them), `string_rand`, `vector_integer_fromlist` |
+| Propeller problems | all 31 run completely and match the oracle (table below) |
+| Differential test | four seeds of 30,000 random programs over every implemented type: 0 mismatches; the programs that use `sin`, `cos` or `tan` are counted apart (last-digit libm differences, 0.2-0.5% of the calls) |
 | Dependencies | none (std only) |
 
-On the 11 problems' real alphabets and cases the Rust core runs 48-80 million EXEC steps per second
-on one thread; the Clojure oracle runs 1.3-1.5 million on the same programs.
+The oracle is the Clojure interpreter in clj-push3 at commit cbb5af5 or later. How it behaves in the
+corners, and where push3-fast deliberately follows Rust instead (Unicode edge cases), is in
+[docs/oracle-quirks.md](docs/oracle-quirks.md).
+
+## Parity on the Propeller problems
+
+For every problem: random programs drawn from the problem's own instruction set and ERCs, run on
+the problem's own training cases with the benchmark's step limit of 2000, on both interpreters; the
+complete final state (all stacks, PRINT output, registers, step count) must be identical. Runs whose
+final EXEC stack is larger than 20,000 nodes are left out (printing them takes longer than running them).
+
+| Problem | Runs compared | Mismatches | Oracle M steps/s | Rust M steps/s |
+|---|---:|---:|---:|---:|
+| small-or-large | 2,000 | 0 | 1.31 | 87.8 |
+| grade | 1,999 | 0 | 1.28 | 67.9 |
+| scrabble-score | 2,000 | 0 | 1.38 | 80.5 |
+| basement | 1,020 | 0 | 1.06 | 83.5 |
+| bouncing-balls | 2,000 | 0 | 1.36 | 46.2 |
+| bowling | 2,000 | 0 | 1.28 | 84.9 |
+| camel-case | 2,000 | 0 | 1.29 | 74.4 |
+| dice-game | 1,966 | 0 | 1.54 | 78.6 |
+| find-pair | 2,000 | 0 | 1.30 | 83.0 |
+| fizz-buzz | 2,000 | 0 | 1.35 | 92.3 |
+| fuel-cost | 2,000 | 0 | 1.27 | 79.7 |
+| gcd | 1,980 | 0 | 1.43 | 80.7 |
+| luhn | 2,000 | 0 | 1.31 | 83.0 |
+| middle-character | 1,980 | 0 | 1.34 | 95.8 |
+| paired-digits | 2,000 | 0 | 1.32 | 78.8 |
+| snow-day | 2,000 | 0 | 1.36 | 72.4 |
+| solve-boolean | 2,000 | 0 | 1.29 | 78.4 |
+| spin-words | 2,000 | 0 | 1.32 | 89.5 |
+| square-digits | 1,980 | 0 | 1.31 | 87.8 |
+| substitution-cipher | 2,000 | 0 | 1.32 | 88.7 |
+| twitter | 1,980 | 0 | 1.35 | 75.1 |
+| smallest | 1,952 | 0 | 1.34 | 57.2 |
+| number-io | 2,000 | 0 | 1.33 | 44.8 |
+| string-classification | 2,000 | 0 | 1.26 | 76.8 |
+| integer-regression | 1,980 | 0 | 1.35 | 58.0 |
+| nguyen-f1 | 1,980 | 0 | 1.44 | 34.5 |
+| nguyen-f5 | 1,980 | 0 | 1.37 | 34.6 |
+| mul3 | 6,400 | 0 | 1.18 | 65.0 |
+| mul4 | 25,600 | 0 | 1.56 | 56.2 |
+| count-odds | 4,000 | 0 | 1.35 | 61.2 |
+| shopping-list | 4,000 | 0 | 1.51 | 47.9 |
+| **31 problems** | **92,797** | **0** | | |
+
+Speeds are million EXEC steps per second on one thread, on the same programs (the oracle's number
+includes JIT warm-up, so read it as an order of magnitude).
 
 ## Benchmark: all implementations
 

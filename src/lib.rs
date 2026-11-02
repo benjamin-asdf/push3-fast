@@ -1247,3 +1247,14 @@ impl Machine {
         }
     }
 }
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+
+    /// `Item` is cloned on almost every EXEC step; a fat pointer in a variant makes it 24 bytes.
+    #[test]
+    fn item_stays_small() {
+        assert!(std::mem::size_of::<Item>() <= 16, "Item is {} bytes", std::mem::size_of::<Item>());
+    }
+}
