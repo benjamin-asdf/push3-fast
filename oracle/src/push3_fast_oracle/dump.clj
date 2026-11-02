@@ -46,11 +46,17 @@
                             #(if (.nextBoolean r) (long (- (.nextInt r 41) 20)) (.nextBoolean r))))
    :max (nth [50 300 1000] (.nextInt r 3))})
 
+(def ^:private execute-ns
+  "Time spent in the oracle's `execute` alone, without generation, state extraction and printing."
+  (atom 0))
+
 (defn- run-oracle [{:keys [program inputs max]}]
-  (let [st (-> (push/setup-state)
+  (let [t0 (System/nanoTime)
+        st (-> (push/setup-state)
                (assoc :exceptions-are-warnings? true)
                (io/with-inputs inputs)
-               (push/execute program {:max-executions max}))]
+               (push/execute program {:max-executions max}))
+        _ (swap! execute-ns + (- (System/nanoTime) t0))]
     {:int (get-in st [:stacks :push/integer])
      :bool (get-in st [:stacks :push/boolean])
      :exec (get-in st [:stacks :push/exec])
@@ -74,7 +80,10 @@
                 (swap! written inc)
                 (swap! steps + (:steps res)))
               (catch Throwable e (swap! failed inc))))))
-      (let [dt (/ (- (System/nanoTime) start) 1e9)]
-        (println (format "oracle: %d programs written, %d failed, %d steps, %.2f s, %.0f runs/s, %.3f M steps/s (includes generation and writing)"
-                         @written @failed @steps dt (/ @written dt) (/ @steps dt 1e6))))))
+      (let [dt (/ (- (System/nanoTime) start) 1e9)
+            ex (/ @execute-ns 1e9)]
+        (println (format "oracle: %d programs written, %d failed, %d steps, %.2f s in total (incl. generation and printing)"
+                         @written @failed @steps dt))
+        (println (format "oracle execute only: %.2f s, %.0f runs/s, %.3f M steps/s (one JVM, no warmup removed)"
+                         ex (/ @written ex) (/ @steps ex 1e6))))))
   (shutdown-agents))
