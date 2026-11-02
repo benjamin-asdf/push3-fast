@@ -56,9 +56,33 @@
 
 (def ^:private string-alphabet "abcxyzABCXYZ 0123456789.,-+:!_\n\t")
 
-(defn- gen-string [^java.util.Random r]
-  (let [n (if (< (.nextDouble r) 0.15) 0 (inc (.nextInt r 8)))]
-    (apply str (repeatedly n #(.charAt string-alphabet (.nextInt r (count string-alphabet)))))))
+(def ^:private number-alphabet "0123456789012345+-.eE ,\n")
+
+(def ^:private number-samples
+  ["0" "-1" "12" "+7" "007" "1.5" "-2.25" "1e3" "1E-2" "3." "42 rest" "  8" "1,2" "5)" "-" "+" "1 2"
+   "12abc" "x1" "" "99999999999999999999" "1e400" "0.0000000000001"])
+
+(def ^:private words ["ab" "x" "Cd" "hello" "A" "z9" "-" "0"])
+
+(def ^:private spaces [" " "  " "\t" "\n" " \t" "\u000b" "\f" "\r" "\u001c"])
+
+(defn- pick [^java.util.Random r coll] (nth coll (.nextInt r (count coll))))
+
+(defn- gen-string
+  "ASCII only. A mix of: the empty string, plain text, numeric-looking text (for the parsers),
+  repeated characters, and words joined by whitespace with leading and trailing whitespace."
+  [^java.util.Random r]
+  (let [p (.nextDouble r)]
+    (cond
+      (< p 0.10) ""
+      (< p 0.22) (pick r number-samples)
+      (< p 0.34) (apply str (repeatedly (inc (.nextInt r 8)) #(.charAt number-alphabet (.nextInt r (count number-alphabet)))))
+      (< p 0.42) (apply str (repeat (+ 2 (.nextInt r 4)) (.charAt string-alphabet (.nextInt r (count string-alphabet)))))
+      (< p 0.55) (str (when (.nextBoolean r) (pick r spaces))
+                      (apply str (interpose (pick r spaces) (repeatedly (inc (.nextInt r 4)) #(pick r words))))
+                      (when (.nextBoolean r) (pick r spaces)))
+      :else (let [n (inc (.nextInt r 8))]
+              (apply str (repeatedly n #(.charAt string-alphabet (.nextInt r (count string-alphabet)))))))))
 
 (defn- gen-ivec
   "Non-empty on purpose: an empty vector literal lands on a [:push/vector :push/clj-object] stack."
