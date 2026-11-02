@@ -508,7 +508,7 @@ impl Machine {
                     self.chr.push(Some(first));
                 } else {
                     self.exec.push(Item::Op(Op::Str(StrOp::Iterate)));
-                    self.exec.push(Item::Str(Rc::from(rest)));
+                    self.exec.push(Item::Str(Rc::new(Rc::from(rest))));
                     self.exec.push(top);
                     self.chr.push(Some(first));
                 }

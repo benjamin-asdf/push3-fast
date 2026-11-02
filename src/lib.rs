@@ -162,16 +162,17 @@ pub enum Item {
     Char(char),
     /// `nil`, as it can sit on the CHAR stack (e.g. `string_first` of "").
     Nil,
-    Str(Rc<str>),
+    /// A pointer to the pointer keeps `Item` at 16 bytes: it is cloned on almost every EXEC step.
+    Str(Rc<Rc<str>>),
     IntVec(Rc<Vec<i64>>),
     /// A value that the oracle pushes onto a stack no instruction reads (an empty vector, a vector
     /// of floats, ...). Executing it only costs a step; the text is its `pr-str`, for `exec_print`
     /// and `exec_=`.
-    Opaque(Rc<str>),
+    Opaque(Rc<String>),
     Op(Op),
     /// A keyword that is not an instruction. It resolves to a named input (`a2`, `b0`, ...) or,
     /// in the oracle, lands on the CLJ-OBJECT stack, which this build does not model.
-    Name(Rc<str>),
+    Name(Rc<String>),
     List(Rc<Vec<Item>>),
 }
 
@@ -477,13 +478,13 @@ impl Machine {
             Item::Bool(b) => self.boolean.push(b),
             Item::Float(v) => self.float.push(sanitize_float(v)),
             Item::Char(c) => self.chr.push(Some(c)),
-            Item::Str(t) => self.string.push(t),
+            Item::Str(t) => self.string.push((*t).clone()),
             Item::IntVec(v) => self.ivec.push(v),
             // a nil literal goes to the CLJ-OBJECT stack in the oracle, which is not modelled
             Item::Nil => self.unsupported = true,
             // lands on a stack that no implemented instruction reads
             Item::Opaque(_) => {}
-            Item::Name(n) => match self.named.iter().find(|(k, _)| k.as_str() == &*n) {
+            Item::Name(n) => match self.named.iter().find(|(k, _)| k.as_str() == n.as_str()) {
                 Some((_, v)) => self.exec.push(v.clone()),
                 None => self.unsupported = true,
             },
@@ -514,7 +515,7 @@ impl Machine {
             Ty::Exec => self.exec[i].clone(),
             Ty::Float => Item::Float(self.float[i]),
             Ty::Char => self.chr[i].map_or(Item::Nil, Item::Char),
-            Ty::Str => Item::Str(self.string[i].clone()),
+            Ty::Str => Item::Str(Rc::new(self.string[i].clone())),
             Ty::IntVec => Item::IntVec(self.ivec[i].clone()),
         }
     }
@@ -526,7 +527,7 @@ impl Machine {
             (Ty::Float, Item::Float(v)) => self.float.push(sanitize_float(v)),
             (Ty::Char, Item::Char(c)) => self.chr.push(Some(c)),
             (Ty::Char, Item::Nil) => self.chr.push(None),
-            (Ty::Str, Item::Str(t)) => self.string.push(t),
+            (Ty::Str, Item::Str(t)) => self.string.push((*t).clone()),
             (Ty::IntVec, Item::IntVec(v)) => self.ivec.push(v),
             (Ty::Exec, it) => self.exec.push(it),
             _ => unreachable!(),
@@ -540,7 +541,7 @@ impl Machine {
             Ty::Exec => self.exec.pop().unwrap(),
             Ty::Float => Item::Float(self.float.pop().unwrap()),
             Ty::Char => self.chr.pop().unwrap().map_or(Item::Nil, Item::Char),
-            Ty::Str => Item::Str(self.string.pop().unwrap()),
+            Ty::Str => Item::Str(Rc::new(self.string.pop().unwrap())),
             Ty::IntVec => Item::IntVec(self.ivec.pop().unwrap()),
         }
     }
@@ -552,7 +553,7 @@ impl Machine {
             (Ty::Float, Item::Float(v)) => self.float.insert(idx, sanitize_float(v)),
             (Ty::Char, Item::Char(c)) => self.chr.insert(idx, Some(c)),
             (Ty::Char, Item::Nil) => self.chr.insert(idx, None),
-            (Ty::Str, Item::Str(t)) => self.string.insert(idx, t),
+            (Ty::Str, Item::Str(t)) => self.string.insert(idx, (*t).clone()),
             (Ty::IntVec, Item::IntVec(v)) => self.ivec.insert(idx, v),
             (Ty::Exec, it) => self.exec.insert(idx, it),
             _ => unreachable!(),
@@ -566,7 +567,7 @@ impl Machine {
             Ty::Exec => self.exec.remove(idx),
             Ty::Float => Item::Float(self.float.remove(idx)),
             Ty::Char => self.chr.remove(idx).map_or(Item::Nil, Item::Char),
-            Ty::Str => Item::Str(self.string.remove(idx)),
+            Ty::Str => Item::Str(Rc::new(self.string.remove(idx))),
             Ty::IntVec => Item::IntVec(self.ivec.remove(idx)),
         }
     }
