@@ -1,5 +1,4 @@
 target/
-*.jsonl
-*.edn
-!examples/*.edn
 .cpcache/
+/cases/
+oracle_s*.edn

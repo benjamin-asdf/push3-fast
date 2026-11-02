@@ -1,0 +1,3 @@
+{:paths ["src"]
+ ;; The reference interpreter (test oracle). Point this at a checkout of clj-push3.
+ :deps {benjamin-schwerdtner/clj-push3 {:local/root "../../benjamin-schwerdtner-clj-push3"}}}
