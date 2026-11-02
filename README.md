@@ -17,7 +17,7 @@ final states.
 | Instructions | 170 (the stack family `dup`, `pop`, `swap`, `rot`, `yank`, `shove`, `print`, ... on five stacks, integer and float arithmetic, comparisons, boolean logic, char predicates, `exec_if/when/while/do_while/k/s/y/=`, `exec_do*range/count/times`), plus `in1`..`in8`, named inputs |
 | Not yet | strings, vectors, CODE, NAME (`string_*` and `vector_integer_*` are 90 of the 258 instructions the Propeller problems use) |
 | Propeller problems | 11 of 31 run completely: bouncing-balls, dice-game, gcd, snow-day, smallest, number-io, integer-regression, nguyen-f1, nguyen-f5, mul3, mul4 |
-| Differential test | 29,995 random programs and about 45,000 runs on those 11 problems' own alphabets and training cases: 0 mismatches against the oracle |
+| Differential test | 29,995 random programs, plus about 100,000 runs on those 11 problems' own alphabets and training cases: 0 mismatches against the oracle |
 | Dependencies | none (std only) |
 
 On the 11 problems' real alphabets and cases the Rust core runs 48-80 million EXEC steps per second
