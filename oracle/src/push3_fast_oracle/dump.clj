@@ -10,25 +10,14 @@
   A case is {:program (...) :inputs [...] :max n :int [...] :bool [...] :float [...] :char [...]
   :exec [...] :print \"...\" :regs [...] :steps n}. Instructions are keywords."
   (:require
-   [benjamin-schwerdtner.clj-push3-play.instructions.impl :as impl]
    [benjamin-schwerdtner.clj-push3-play.instructions.input-output :as io]
    [benjamin-schwerdtner.clj-push3-play.instructions.interface :as instr]
    [benjamin-schwerdtner.clj-push3-play.interpreter :as push]
    [clojure.java.io :as io*]
-   [benjamin-schwerdtner.clj-push3-play.stack.pushstate :as stack]
    [clojure.string :as string]))
 
-;; Test-harness patch of the oracle. Upstream :integer_div returns `(bigint ...)`, a clojure BigInt
-;; that stays a BigInt after the clamp, so :integer_print shows it as "5N". That is an upstream
-;; quirk, not Push semantics, and push3-fast does not reproduce it: here the quotient is a Long.
-(impl/register-instruction
- {:sym-name :integer_div
-  :in [:push/integer :push/integer]
-  :out :state
-  :f (fn [state divisor dividend]
-       (if (zero? divisor)
-         state
-         (stack/push state :push/integer (long (/ (Math/floor dividend) (Math/floor divisor))))))})
+;; The oracle needs clj-push3 at cbb5af5 or later: before that :integer_div pushed a clojure
+;; BigInt (printed as "5N" by :integer_print). The harness no longer patches it.
 
 (defn- registered? [n] (not= :no-instruction (instr/instruction (keyword n))))
 
