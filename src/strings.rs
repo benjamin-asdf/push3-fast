@@ -167,6 +167,7 @@ impl Machine {
         }
     }
 
+    #[inline(never)]
     pub(crate) fn run_str_op(&mut self, op: StrOp) {
         macro_rules! ps {
             () => {

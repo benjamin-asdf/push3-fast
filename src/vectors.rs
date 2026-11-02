@@ -83,6 +83,7 @@ impl Machine {
         self.ivec.push(Rc::new(v));
     }
 
+    #[inline(never)]
     pub(crate) fn run_vec_op(&mut self, op: VecOp) {
         // (number of INTEGER items, number of vectors) needed
         let (ni, nv) = match op {

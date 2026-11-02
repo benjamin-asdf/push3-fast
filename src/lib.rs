@@ -604,6 +604,7 @@ impl Machine {
         }
     }
 
+    #[inline(never)]
     fn family(&mut self, f: Fam, t: Ty) {
         match f {
             Fam::StackDepth => {
