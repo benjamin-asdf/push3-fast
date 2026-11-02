@@ -126,6 +126,22 @@ fn main() {
 fn real_main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        // trigcheck <file>: lines of `x sin cos tan` as hex bits from java.lang.Math
+        Some("trigcheck") => {
+            let text = std::fs::read_to_string(args.get(2).expect("file")).expect("read");
+            let (mut n, mut bad) = (0u64, [0u64; 3]);
+            for l in text.lines() {
+                let v: Vec<u64> = l.split(' ').map(|h| u64::from_str_radix(h, 16).unwrap()).collect();
+                let x = f64::from_bits(v[0]);
+                for (k, got) in [x.sin(), x.cos(), x.tan()].iter().enumerate() {
+                    if got.to_bits() != v[k + 1] {
+                        bad[k] += 1;
+                    }
+                }
+                n += 1;
+            }
+            println!("{n} samples; Rust differs from Math: sin {} cos {} tan {}", bad[0], bad[1], bad[2]);
+        }
         Some("names") => {
             for n in push3_fast::all_names() {
                 println!("{n}");
