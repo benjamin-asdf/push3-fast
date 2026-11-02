@@ -134,7 +134,8 @@ for example a Clojure `babashka.process` or a Python `subprocess`.
 
 ```
 # 1. cases: random programs run on clj-push3, with the full final state recorded
-cd oracle && clojure -M -m push3-fast-oracle.dump 5000 7 ../cases.edn   # needs a clj-push3 checkout, see oracle/deps.edn
+scripts/difftest.sh 30000 7        # needs a clj-push3 checkout at cbb5af5 or later, see oracle/deps.edn
+scripts/verify-all.sh "41 42 43"  # several seeds, then every Propeller problem
 
 # 2. compare
 cargo build --release
@@ -143,18 +144,16 @@ target/release/push3-fast bench cases.edn 50
 ```
 
 The oracle must stay the reference: when an instruction changes in clj-push3, the differential
-test fails, and the change is followed here. Semantics that came out of this, all replicated:
-operand order of `-`, `div`, `mod` (second item op top item), `div` through double division and
-truncation, floored `mod`, clamping of every pushed integer to ±1e10, `rot` leaving the top item in
-place, `yank` taking `(int index)` and treating out-of-range indices as a no-op that still pops.
+test fails, and the change is followed here. What this has turned up in the corners is in
+[docs/oracle-quirks.md](docs/oracle-quirks.md).
 
 ## Roadmap
 
-1. Stages 1 and 2a: EXEC, INTEGER, BOOLEAN, FLOAT, CHAR, PRINT, registers. Done.
-2. Strings (53 instructions), `vector_integer` (37) and NAME, the rest of the 31 Propeller
-   problems (324 symbols, 258 of them real instructions).
-3. Early exit on the first failed case, case downsampling, parallel evaluation.
-4. Python bindings.
+1. Done: all 31 Propeller problems, 265 instruction names, parity with the oracle.
+2. Early exit on the first failed case, case downsampling, parallel evaluation.
+3. Python bindings.
+4. The CODE and NAME stacks, and vectors of floats, strings, booleans and chars, for instruction
+   sets beyond the Propeller benchmarks.
 
 ## Licence
 
