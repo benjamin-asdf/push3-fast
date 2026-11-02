@@ -1,0 +1,8 @@
+push3-fast (Rust)	count-loop	1000000	0.037800	1000 (checked at N=1000)
+clj-push3 base (Clojure)	count-loop	200000	0.884651	200000
+clj-push3 perf branch (Clojure)	count-loop	200000	0.551697	200000
+Propeller (Clojure)	count-loop	200000	0.814941	200000
+pushr 0.4.1 (Rust)	count-loop	200000	0.046134	200000
+Clojush 3.32 (Clojure)	count-loop	200000	0.458243	200000
+PyshGP 0.1.8 (Python)	count-loop	20000	1.171718	20000
+CPushPush (C++)	count-loop	50000	0.027105	50000
