@@ -125,10 +125,14 @@
 
 (defn -main [n seed out names-file]
   (binding [*err* (java.io.Writer/nullWriter)]
-    (let [names (string/split-lines (slurp names-file))
+    (let [;; P3F_EXCLUDE=prefix,prefix: leave instructions out (e.g. while another type is unfinished)
+          ;; P3F_TYPES=int,bool,float,char,string,ivec: literal types in generated programs and inputs
+          exclude (remove string/blank? (string/split (or (System/getenv "P3F_EXCLUDE") "") #","))
+          names (remove (fn [n] (some #(string/starts-with? n %) exclude))
+                        (string/split-lines (slurp names-file)))
           ops (filterv registered? names)
           missing (remove registered? names)
-          types [:int :bool :float :char :string :ivec]
+          types (mapv keyword (string/split (or (System/getenv "P3F_TYPES") "int,bool,float,char,string,ivec") #","))
           r (java.util.Random. (parse-long seed))
           n (parse-long n)
           start (System/nanoTime)
