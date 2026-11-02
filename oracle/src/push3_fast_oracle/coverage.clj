@@ -11,7 +11,7 @@
       (doseq [p problems/all-problems]
         (let [alpha (problems/alphabet p)
               kws (filter keyword? alpha)
-              missing (remove have kws)
+              missing (remove (into have (map #(keyword (name %)) (:input-names p))) kws)
               lits (remove keyword? alpha)]
           (println (format "%-22s %3d instructions, %3d missing, %2d literals/ERCs (types: %s)  %s"
                            (name (:name p)) (count kws) (count missing) (count lits)

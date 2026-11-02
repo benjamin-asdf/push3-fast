@@ -12,9 +12,12 @@ use push3_fast::{Item, Machine};
 use std::io::{BufRead, Write};
 use std::time::Instant;
 
+static UNSUPPORTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 struct Case {
     program: Item,
     inputs: Vec<Item>,
+    input_names: Vec<String>,
     max: u64,
     want: Option<State>,
 }
@@ -76,12 +79,23 @@ fn parse_case(line: &str) -> Result<Case, String> {
         }
         _ => None,
     };
-    Ok(Case { program, inputs: items(e.get("inputs"))?, max, want })
+    let input_names = match e.get("input-names") {
+        Some(v) => v.items().ok_or(":input-names must be a vector")?.iter().map(|k| match k {
+            Edn::Kw(n) => Ok(n.clone()),
+            _ => Err(":input-names must be keywords".to_string()),
+        }).collect::<Result<Vec<_>, _>>()?,
+        None => Vec::new(),
+    };
+    Ok(Case { program, inputs: items(e.get("inputs"))?, input_names, max, want })
 }
 
 fn run_case(c: &Case) -> State {
     let mut m = Machine::new(c.program.clone(), c.inputs.clone());
+    m.named = c.input_names.iter().cloned().zip(c.inputs.iter().cloned()).collect();
     m.run(c.max);
+    if m.unsupported {
+        UNSUPPORTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     State {
         int: m.int,
         boolean: m.boolean,
@@ -206,6 +220,10 @@ fn real_main() {
                         );
                     }
                 }
+            }
+            let unsup = UNSUPPORTED.load(std::sync::atomic::Ordering::Relaxed);
+            if unsup > 0 {
+                println!("note: {unsup} runs touched unmodelled behaviour (unknown keywords)");
             }
             println!("{} cases, {} mismatches, {} further differences in programs using sin/cos/tan (last-digit libm differences, tolerated)", cases.len(), bad, trig);
             if bad > 0 {

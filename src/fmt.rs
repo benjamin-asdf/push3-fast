@@ -100,6 +100,10 @@ pub fn write_pr(item: &Item, out: &mut String) {
             out.push(':');
             out.push_str(&o.name());
         }
+        Item::Name(n) => {
+            out.push(':');
+            out.push_str(n);
+        }
         Item::List(l) => {
             out.push('(');
             for (i, it) in l.iter().enumerate() {

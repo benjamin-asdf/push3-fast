@@ -213,7 +213,7 @@ impl Item {
             Edn::Int(v) => Ok(Item::Int(*v)),
             Edn::Float(v) => Ok(Item::Float(*v)),
             Edn::Char(c) => Ok(Item::Char(*c)),
-            Edn::Kw(n) => Op::from_name(n).map(Item::Op).ok_or_else(|| format!("unknown instruction :{n}")),
+            Edn::Kw(n) => Ok(Op::from_name(n).map(Item::Op).unwrap_or_else(|| Item::Name(Rc::from(n.as_str())))),
             Edn::List(v) | Edn::Vector(v) => {
                 Ok(Item::List(Rc::new(v.iter().map(Item::from_edn).collect::<Result<Vec<_>, _>>()?)))
             }

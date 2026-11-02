@@ -151,6 +151,9 @@ pub enum Item {
     Float(f64),
     Char(char),
     Op(Op),
+    /// A keyword that is not an instruction. It resolves to a named input (`a2`, `b0`, ...) or,
+    /// in the oracle, lands on the CLJ-OBJECT stack, which this build does not model.
+    Name(Rc<str>),
     List(Rc<Vec<Item>>),
 }
 
@@ -329,6 +332,10 @@ pub struct Machine {
     /// Output registers c0..c7; `None` while unset.
     pub regs: [Option<bool>; 8],
     pub inputs: Vec<Item>,
+    /// Inputs bound by name instead of `inN` (the multiplier problems).
+    pub named: Vec<(String, Item)>,
+    /// Set when the program touched behaviour this build does not model (so the run is not comparable).
+    pub unsupported: bool,
     pub steps: u64,
 }
 
@@ -412,6 +419,8 @@ impl Machine {
             print: String::new(),
             regs: [None; 8],
             inputs,
+            named: Vec::new(),
+            unsupported: false,
             steps: 0,
         }
     }
@@ -436,6 +445,10 @@ impl Machine {
             Item::Bool(b) => self.boolean.push(b),
             Item::Float(v) => self.float.push(sanitize_float(v)),
             Item::Char(c) => self.chr.push(c),
+            Item::Name(n) => match self.named.iter().find(|(k, _)| k.as_str() == &*n) {
+                Some((_, v)) => self.exec.push(v.clone()),
+                None => self.unsupported = true,
+            },
             Item::List(l) => {
                 for it in l.iter().rev() {
                     self.exec.push(it.clone());
