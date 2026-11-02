@@ -214,10 +214,10 @@ impl Item {
             Edn::Float(v) => Ok(Item::Float(*v)),
             Edn::Char(c) => Ok(Item::Char(*c)),
             Edn::Kw(n) => Ok(Op::from_name(n).map(Item::Op).unwrap_or_else(|| Item::Name(Rc::from(n.as_str())))),
-            Edn::List(v) | Edn::Vector(v) => {
-                Ok(Item::List(Rc::new(v.iter().map(Item::from_edn).collect::<Result<Vec<_>, _>>()?)))
-            }
-            other => Err(format!("not a stage 1 Push item: {other:?}")),
+            Edn::List(v) => Ok(Item::List(Rc::new(v.iter().map(Item::from_edn).collect::<Result<Vec<_>, _>>()?))),
+            // a vector is a literal (a value for a vector stack), not code: not modelled yet
+            Edn::Vector(_) => Err("vector literals are not supported yet".into()),
+            other => Err(format!("not a supported Push item yet: {other:?}")),
         }
     }
 

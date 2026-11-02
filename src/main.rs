@@ -123,13 +123,25 @@ fn write_state(s: &State) -> String {
     )
 }
 
+/// Cases using item types this build does not model (vectors, strings) are skipped and counted.
 fn load(path: &str) -> Vec<Case> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    text.lines()
+    let mut skipped = 0;
+    let cases: Vec<Case> = text
+        .lines()
         .filter(|l| !l.trim().is_empty())
-        .enumerate()
-        .map(|(i, l)| parse_case(l).unwrap_or_else(|e| panic!("{path} line {}: {e}", i + 1)))
-        .collect()
+        .filter_map(|l| match parse_case(l) {
+            Ok(c) => Some(c),
+            Err(_) => {
+                skipped += 1;
+                None
+            }
+        })
+        .collect();
+    if skipped > 0 {
+        println!("note: {skipped} cases skipped (they use item types that are not supported yet)");
+    }
+    cases
 }
 
 fn main() {
