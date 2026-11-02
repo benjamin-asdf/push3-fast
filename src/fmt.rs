@@ -3,6 +3,44 @@
 
 use crate::{Item, TINY};
 
+/// Shortest round-trip digits of a finite non-zero `|x|` and the decimal exponent of the first digit.
+/// Rust's shortest-digit search rounds an exact tie up (`...0625` to `...063`); Java picks the
+/// candidate whose last digit is even (`...062`). Ties only exist at 16-17 digits, where the exact
+/// decimal expansion ends right after the 5.
+fn java_digits(a: f64) -> (String, i32) {
+    let s = format!("{a:e}");
+    let (mant, exp) = s.split_once('e').unwrap_or((&s, "0"));
+    let mut digits: String = mant.chars().filter(|c| *c != '.').collect();
+    let exp: i32 = exp.parse().unwrap_or(0);
+    let n = digits.len();
+    if n >= 16 {
+        let exact = format!("{:.*e}", n + 40, a);
+        let ex: String = exact.split('e').next().unwrap_or("").chars().filter(|c| *c != '.').collect();
+        if ex.len() > n && ex.as_bytes()[n] == b'5' && ex[n + 1..].bytes().all(|b| b == b'0') {
+            let mut t: Vec<u8> = ex.as_bytes()[..n].to_vec();
+            if (t[n - 1] - b'0') % 2 == 1 {
+                // round the truncated digits up (no carry out of the first digit is handled)
+                let mut i = n;
+                while i > 0 {
+                    i -= 1;
+                    if t[i] == b'9' {
+                        t[i] = b'0';
+                    } else {
+                        t[i] += 1;
+                        break;
+                    }
+                }
+            }
+            if let Ok(d) = String::from_utf8(t) {
+                if d.as_bytes()[0] != b'0' {
+                    digits = d;
+                }
+            }
+        }
+    }
+    (digits, exp)
+}
+
 /// Java `Double.toString`: shortest round-trip digits (JDK 19+), plain decimal for
 /// 1e-3 <= |x| < 1e7, otherwise computerized scientific notation with at least one fraction digit.
 pub fn java_double(x: f64) -> String {
@@ -15,19 +53,21 @@ pub fn java_double(x: f64) -> String {
     if x == 0.0 {
         return if x.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
     }
+    let sign = if x < 0.0 { "-" } else { "" };
+    let (digits, exp) = java_digits(x.abs());
     let a = x.abs();
     if (1e-3..1e7).contains(&a) {
-        let s = format!("{x}");
-        if s.contains('.') {
-            s
+        if exp >= 0 {
+            let int_len = exp as usize + 1;
+            let padded = format!("{digits:0<int_len$}");
+            let (int, frac) = padded.split_at(int_len);
+            format!("{sign}{int}.{}", if frac.is_empty() { "0" } else { frac })
         } else {
-            format!("{s}.0")
+            format!("{sign}0.{}{digits}", "0".repeat((-exp - 1) as usize))
         }
     } else {
-        let s = format!("{x:e}");
-        let (mant, exp) = s.split_once('e').unwrap();
-        let mant = if mant.contains('.') { mant.to_string() } else { format!("{mant}.0") };
-        format!("{mant}E{exp}")
+        let (first, rest) = digits.split_at(1);
+        format!("{sign}{first}.{}E{exp}", if rest.is_empty() { "0" } else { rest })
     }
 }
 
@@ -126,5 +166,24 @@ pub fn write_pr(item: &Item, out: &mut String) {
             }
             out.push(')');
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::java_double;
+
+    #[test]
+    fn java_double_forms() {
+        assert_eq!(java_double(-2.2897963681364062e12), "-2.2897963681364062E12");
+        assert_eq!(java_double(1.0), "1.0");
+        assert_eq!(java_double(100.0), "100.0");
+        assert_eq!(java_double(1234567.5), "1234567.5");
+        assert_eq!(java_double(0.001), "0.001");
+        assert_eq!(java_double(0.00123), "0.00123");
+        assert_eq!(java_double(1e7), "1.0E7");
+        assert_eq!(java_double(1.5e-5), "1.5E-5");
+        assert_eq!(java_double(-98.3764220847985), "-98.3764220847985");
+        assert_eq!(java_double(1e12), "1.0E12");
     }
 }
