@@ -19,7 +19,7 @@ final states.
 | Differential test | 29,975 random programs, 0 mismatches against the oracle |
 | Dependencies | none (std only) |
 
-Speed, same machine (gamelap, an Arch Linux laptop, one thread), same 4,996 programs, 568,850 EXEC steps:
+Speed, one thread, same 4,996 programs, 568,850 EXEC steps, on an AMD Ryzen 9 8945H laptop (8 cores / 16 threads, 14 GB RAM, Linux 7.2, OpenJDK 27, rustc 1.99; clocks scale with load):
 
 | | EXEC steps / s |
 |---|---|
