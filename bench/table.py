@@ -12,11 +12,12 @@ import sys
 INFO = {
     "push3-fast": (
         "Rust",
-        "Complete: no, 170 instructions (EXEC, INTEGER, BOOLEAN, FLOAT, CHAR stacks, PRINT, output registers); "
-        "11 of the 31 Propeller problems run completely, strings and vectors are missing. "
+        "Complete: for the Propeller benchmarks yes, 265 instruction names; all 31 problems run and match the "
+        "oracle (92,797 runs, 0 mismatches). Not modelled: CODE, NAME, vectors other than integer. "
         "Pro: fastest here, no dependencies, EDN interface, semantics pinned to clj-push3 by a differential test "
-        "(29,995 random programs, 0 mismatches). "
-        "Con: incomplete; sin/cos/tan differ from Java in the last digit for 0.2-0.5% of calls.",
+        "(four seeds of 30,000 random programs over every type, 0 mismatches). "
+        "Con: young; sin/cos/tan differ from Java in the last digit for 0.2-0.5% of calls; Unicode edge cases "
+        "follow Rust, not Java (docs/oracle-quirks.md).",
     ),
     "pushr": (
         "Rust",
