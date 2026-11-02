@@ -11,11 +11,13 @@
 (defn run1 [n]
   (let [program (list 0 0 (dec n) 'exec_do*range (list 'integer_pop 1 'integer_add))
         t (System/nanoTime)
-        st (binding [g/global-max-points 1000000000 g/global-evalpush-limit 2000000000]
-             (interp/run-push program (ps/make-push-state)))]
+        st (interp/run-push program (ps/make-push-state))]
     [(/ (- (System/nanoTime) t) 1e9) (first (:integer st))]))
 
 (defn -main [n reps]
+  ;; the limits are atoms, not dynamic vars
+  (reset! g/global-max-points 1000000000)
+  (reset! g/global-evalpush-limit 2000000000)
   (let [n (Long/parseLong n) reps (Long/parseLong reps)]
     (dotimes [_ 3] (run1 (min n 20000)))
     (let [[best res] (first (sort-by first (repeatedly reps #(run1 n))))]
