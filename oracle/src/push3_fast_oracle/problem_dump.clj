@@ -35,12 +35,8 @@
                (assoc :exceptions-are-warnings? true)
                (io/with-inputs (if input-names (zipmap input-names inputs) inputs))
                (push/execute program {:max-executions max}))
-        ns (- (System/nanoTime) t0)
-        g #(get-in st [:stacks %])]
-    [ns {:int (g :push/integer) :bool (g :push/boolean) :float (mapv double (g :push/float))
-         :char (g :push/char) :exec (g :push/exec) :print (io/printed st)
-         :regs (mapv #(get-in st [:push/output (keyword (str "c" %))]) (range 8))
-         :steps (:push/num-executions st)}]))
+        ns (- (System/nanoTime) t0)]
+    [ns (dump/final-state st)]))
 
 (defn -main [problem n-programs n-cases seed out]
   (binding [*err* (java.io.Writer/nullWriter)]
@@ -63,6 +59,6 @@
                                    "\n")))))
             (catch Throwable _ (swap! failed inc)))))
       (let [ex (/ @exec-ns 1e9)]
-        (println (format "%s: %d runs written, %d skipped (state too large), %d failed, %d steps; oracle execute only %.2f s = %.0f runs/s, %.3f M steps/s"
+        (println (format "%s: %d runs written, %d skipped (state too large or unmodelled stack non-empty), %d failed, %d steps; oracle execute only %.2f s = %.0f runs/s, %.3f M steps/s"
                          problem @written @skipped @failed @steps ex (/ @written ex) (/ @steps ex 1e6))))))
   (shutdown-agents))

@@ -96,6 +96,18 @@ pub fn write_pr(item: &Item, out: &mut String) {
         Item::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Item::Float(v) => out.push_str(&pr_double(*v)),
         Item::Char(c) => out.push_str(&pr_char(*c)),
+        Item::Nil => out.push_str("nil"),
+        Item::Str(t) => out.push_str(&pr_string(t)),
+        Item::IntVec(v) => {
+            out.push('[');
+            for (i, x) in v.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                out.push_str(&x.to_string());
+            }
+            out.push(']');
+        }
         Item::Op(o) => {
             out.push(':');
             out.push_str(&o.name());

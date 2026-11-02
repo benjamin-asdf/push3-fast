@@ -29,6 +29,8 @@ struct State {
     boolean: Vec<bool>,
     float: Vec<String>,
     chr: Vec<String>,
+    string: Vec<String>,
+    ivec: Vec<String>,
     exec: Vec<String>,
     print: String,
     regs: Vec<String>,
@@ -60,6 +62,8 @@ fn parse_case(line: &str) -> Result<Case, String> {
                 boolean: bools.iter().map(|i| if let Item::Bool(v) = i { *v } else { unreachable!() }).collect(),
                 float: text("float")?,
                 chr: text("char")?,
+                string: text("string")?,
+                ivec: text("vector_integer")?,
                 exec: text("exec")?,
                 print: match e.get("print") {
                     Some(Edn::Str(s)) => s.clone(),
@@ -100,7 +104,9 @@ fn run_case(c: &Case) -> State {
         int: m.int,
         boolean: m.boolean,
         float: m.float.iter().map(|v| fmt::pr_double(*v)).collect(),
-        chr: m.chr.iter().map(|c| fmt::pr_char(*c)).collect(),
+        chr: m.chr.iter().map(|c| c.map_or("nil".to_string(), fmt::pr_char)).collect(),
+        string: m.string.iter().map(|t| fmt::pr_string(t)).collect(),
+        ivec: m.ivec.iter().map(|v| fmt::pr_str(&push3_fast::Item::IntVec(v.clone()))).collect(),
         exec: m.exec.iter().map(fmt::pr_str).collect(),
         print: m.print,
         regs: m.regs.iter().map(|r| r.map_or("nil".to_string(), |b| b.to_string())).collect(),
@@ -111,11 +117,13 @@ fn run_case(c: &Case) -> State {
 fn write_state(s: &State) -> String {
     let join = |v: &[String]| v.join(" ");
     format!(
-        "{{:int [{}] :bool [{}] :float [{}] :char [{}] :exec [{}] :print {} :regs [{}] :steps {}}}",
+        "{{:int [{}] :bool [{}] :float [{}] :char [{}] :string [{}] :vector_integer [{}] :exec [{}] :print {} :regs [{}] :steps {}}}",
         s.int.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "),
         s.boolean.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "),
         join(&s.float),
         join(&s.chr),
+        join(&s.string),
+        join(&s.ivec),
         join(&s.exec),
         fmt::pr_string(&s.print),
         join(&s.regs),
@@ -177,13 +185,17 @@ fn real_main() {
                 m.run(k);
                 let ex: Vec<String> = m.exec.iter().map(fmt::pr_str).collect();
                 let fl: Vec<String> = m.float.iter().map(|v| fmt::pr_double(*v)).collect();
-                let ch: Vec<String> = m.chr.iter().map(|c| fmt::pr_char(*c)).collect();
+                let ch: Vec<String> = m.chr.iter().map(|c| c.map_or("nil".to_string(), fmt::pr_char)).collect();
+                let st: Vec<String> = m.string.iter().map(|t| fmt::pr_string(t)).collect();
+                let vc: Vec<String> = m.ivec.iter().map(|v| fmt::pr_str(&push3_fast::Item::IntVec(v.clone()))).collect();
                 println!(
-                    "{k} [[{}] [{}] [{}] [{}] [{}] {}]",
+                    "{k} [[{}] [{}] [{}] [{}] [{}] [{}] [{}] {}]",
                     m.int.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "),
                     m.boolean.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "),
                     fl.join(" "),
                     ch.join(" "),
+                    st.join(" "),
+                    vc.join(" "),
                     ex.join(" "),
                     fmt::pr_string(&m.print)
                 );

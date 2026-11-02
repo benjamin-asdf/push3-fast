@@ -215,8 +215,14 @@ impl Item {
             Edn::Char(c) => Ok(Item::Char(*c)),
             Edn::Kw(n) => Ok(Op::from_name(n).map(Item::Op).unwrap_or_else(|| Item::Name(Rc::from(n.as_str())))),
             Edn::List(v) => Ok(Item::List(Rc::new(v.iter().map(Item::from_edn).collect::<Result<Vec<_>, _>>()?))),
-            // a vector is a literal (a value for a vector stack), not code: not modelled yet
-            Edn::Vector(_) => Err("vector literals are not supported yet".into()),
+            Edn::Nil => Ok(Item::Nil),
+            Edn::Str(t) => Ok(Item::Str(Rc::from(t.as_str()))),
+            // a vector is a literal (a value for a vector stack), not code. Only non-empty vectors of
+            // integers are modelled: an empty one lands on a [:push/vector :push/clj-object] stack.
+            Edn::Vector(v) if !v.is_empty() && v.iter().all(|x| matches!(x, Edn::Int(_))) => Ok(Item::IntVec(Rc::new(
+                v.iter().map(|x| if let Edn::Int(i) = x { *i } else { unreachable!() }).collect(),
+            ))),
+            Edn::Vector(_) => Err("this vector literal is not supported".into()),
             other => Err(format!("not a supported Push item yet: {other:?}")),
         }
     }

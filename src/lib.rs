@@ -7,6 +7,8 @@
 
 pub mod edn;
 pub mod fmt;
+pub mod strings;
+pub mod vectors;
 
 use std::rc::Rc;
 
@@ -40,6 +42,10 @@ pub enum Ty {
     Exec,
     Float,
     Char,
+    /// STRING stack (items are `Rc<str>`).
+    Str,
+    /// `[:push/vector :push/integer]` stack.
+    IntVec,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -142,6 +148,10 @@ pub enum Op {
     SetC(u8),
     C(u8),
     In(u8),
+    /// `string_*` instructions that are not the shared stack family; see `strings.rs`.
+    Str(strings::StrOp),
+    /// `vector_integer_*` instructions that are not the shared stack family; see `vectors.rs`.
+    Vec(vectors::VecOp),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -150,6 +160,10 @@ pub enum Item {
     Bool(bool),
     Float(f64),
     Char(char),
+    /// `nil`, as it can sit on the CHAR stack (e.g. `string_first` of "").
+    Nil,
+    Str(Rc<str>),
+    IntVec(Rc<Vec<i64>>),
     Op(Op),
     /// A keyword that is not an instruction. It resolves to a named input (`a2`, `b0`, ...) or,
     /// in the oracle, lands on the CLJ-OBJECT stack, which this build does not model.
@@ -173,12 +187,14 @@ const FAMS: [(&str, Fam); 14] = [
     ("deep_dup", Fam::DeepDup),
     ("print", Fam::Print),
 ];
-const TYS: [(&str, Ty); 5] = [
+const TYS: [(&str, Ty); 7] = [
     ("integer", Ty::Int),
     ("boolean", Ty::Bool),
     ("exec", Ty::Exec),
     ("float", Ty::Float),
     ("char", Ty::Char),
+    ("string", Ty::Str),
+    ("vector_integer", Ty::IntVec),
 ];
 
 const PLAIN: &[(&str, Op)] = &[
@@ -285,7 +301,10 @@ impl Op {
                 }
             }
         }
-        None
+        if let Some(o) = strings::from_name(name) {
+            return Some(Op::Str(o));
+        }
+        vectors::from_name(name).map(Op::Vec)
     }
 
     pub fn name(&self) -> String {
@@ -296,6 +315,8 @@ impl Op {
             Op::In(k) => format!("in{k}"),
             Op::SetC(k) => format!("set_c{k}"),
             Op::C(k) => format!("c{k}"),
+            Op::Str(o) => strings::name(*o),
+            Op::Vec(o) => vectors::name(*o),
             Op::Fam(f, t) => {
                 let tn = TYS.iter().find(|(_, x)| x == t).unwrap().0;
                 let fname = FAMS.iter().find(|(_, x)| x == f).unwrap().0;
@@ -318,6 +339,8 @@ pub fn all_names() -> Vec<String> {
     v.extend((1..=8).map(|k| format!("in{k}")));
     v.extend((0..8).map(|k| format!("set_c{k}")));
     v.extend((0..8).map(|k| format!("c{k}")));
+    v.extend(strings::NAMES.iter().map(|(n, _)| n.to_string()));
+    v.extend(vectors::NAMES.iter().map(|(n, _)| n.to_string()));
     v
 }
 
@@ -326,7 +349,10 @@ pub struct Machine {
     pub int: Vec<i64>,
     pub boolean: Vec<bool>,
     pub float: Vec<f64>,
-    pub chr: Vec<char>,
+    /// `None` is a `nil` item; instructions that cannot take it are no-ops that still pop it.
+    pub chr: Vec<Option<char>>,
+    pub string: Vec<Rc<str>>,
+    pub ivec: Vec<Rc<Vec<i64>>>,
     /// Everything printed so far (the oracle keeps it as the single item of the PRINT stack).
     pub print: String,
     /// Output registers c0..c7; `None` while unset.
@@ -416,6 +442,8 @@ impl Machine {
             boolean: Vec::new(),
             float: Vec::new(),
             chr: Vec::new(),
+            string: Vec::new(),
+            ivec: Vec::new(),
             print: String::new(),
             regs: [None; 8],
             inputs,
@@ -444,7 +472,11 @@ impl Machine {
             Item::Int(v) => self.int.push(clamp(v as i128)),
             Item::Bool(b) => self.boolean.push(b),
             Item::Float(v) => self.float.push(sanitize_float(v)),
-            Item::Char(c) => self.chr.push(c),
+            Item::Char(c) => self.chr.push(Some(c)),
+            Item::Str(t) => self.string.push(t),
+            Item::IntVec(v) => self.ivec.push(v),
+            // a nil literal goes to the CLJ-OBJECT stack in the oracle, which is not modelled
+            Item::Nil => self.unsupported = true,
             Item::Name(n) => match self.named.iter().find(|(k, _)| k.as_str() == &*n) {
                 Some((_, v)) => self.exec.push(v.clone()),
                 None => self.unsupported = true,
@@ -464,6 +496,8 @@ impl Machine {
             Ty::Exec => self.exec.len(),
             Ty::Float => self.float.len(),
             Ty::Char => self.chr.len(),
+            Ty::Str => self.string.len(),
+            Ty::IntVec => self.ivec.len(),
         }
     }
 
@@ -473,7 +507,9 @@ impl Machine {
             Ty::Bool => Item::Bool(self.boolean[i]),
             Ty::Exec => self.exec[i].clone(),
             Ty::Float => Item::Float(self.float[i]),
-            Ty::Char => Item::Char(self.chr[i]),
+            Ty::Char => self.chr[i].map_or(Item::Nil, Item::Char),
+            Ty::Str => Item::Str(self.string[i].clone()),
+            Ty::IntVec => Item::IntVec(self.ivec[i].clone()),
         }
     }
 
@@ -482,7 +518,10 @@ impl Machine {
             (Ty::Int, Item::Int(v)) => self.int.push(clamp(v as i128)),
             (Ty::Bool, Item::Bool(b)) => self.boolean.push(b),
             (Ty::Float, Item::Float(v)) => self.float.push(sanitize_float(v)),
-            (Ty::Char, Item::Char(c)) => self.chr.push(c),
+            (Ty::Char, Item::Char(c)) => self.chr.push(Some(c)),
+            (Ty::Char, Item::Nil) => self.chr.push(None),
+            (Ty::Str, Item::Str(t)) => self.string.push(t),
+            (Ty::IntVec, Item::IntVec(v)) => self.ivec.push(v),
             (Ty::Exec, it) => self.exec.push(it),
             _ => unreachable!(),
         }
@@ -494,7 +533,9 @@ impl Machine {
             Ty::Bool => Item::Bool(self.boolean.pop().unwrap()),
             Ty::Exec => self.exec.pop().unwrap(),
             Ty::Float => Item::Float(self.float.pop().unwrap()),
-            Ty::Char => Item::Char(self.chr.pop().unwrap()),
+            Ty::Char => self.chr.pop().unwrap().map_or(Item::Nil, Item::Char),
+            Ty::Str => Item::Str(self.string.pop().unwrap()),
+            Ty::IntVec => Item::IntVec(self.ivec.pop().unwrap()),
         }
     }
 
@@ -503,7 +544,10 @@ impl Machine {
             (Ty::Int, Item::Int(v)) => self.int.insert(idx, clamp(v as i128)),
             (Ty::Bool, Item::Bool(b)) => self.boolean.insert(idx, b),
             (Ty::Float, Item::Float(v)) => self.float.insert(idx, sanitize_float(v)),
-            (Ty::Char, Item::Char(c)) => self.chr.insert(idx, c),
+            (Ty::Char, Item::Char(c)) => self.chr.insert(idx, Some(c)),
+            (Ty::Char, Item::Nil) => self.chr.insert(idx, None),
+            (Ty::Str, Item::Str(t)) => self.string.insert(idx, t),
+            (Ty::IntVec, Item::IntVec(v)) => self.ivec.insert(idx, v),
             (Ty::Exec, it) => self.exec.insert(idx, it),
             _ => unreachable!(),
         }
@@ -515,7 +559,9 @@ impl Machine {
             Ty::Bool => Item::Bool(self.boolean.remove(idx)),
             Ty::Exec => self.exec.remove(idx),
             Ty::Float => Item::Float(self.float.remove(idx)),
-            Ty::Char => Item::Char(self.chr.remove(idx)),
+            Ty::Char => self.chr.remove(idx).map_or(Item::Nil, Item::Char),
+            Ty::Str => Item::Str(self.string.remove(idx)),
+            Ty::IntVec => Item::IntVec(self.ivec.remove(idx)),
         }
     }
 
@@ -526,6 +572,8 @@ impl Machine {
             Ty::Exec => self.exec.clear(),
             Ty::Float => self.float.clear(),
             Ty::Char => self.chr.clear(),
+            Ty::Str => self.string.clear(),
+            Ty::IntVec => self.ivec.clear(),
         }
     }
 
@@ -543,6 +591,7 @@ impl Machine {
         match (t, it) {
             // `print-form`: a char (or string) item prints as itself, whatever stack it came from
             (_, Item::Char(c)) => c.to_string(),
+            (_, Item::Str(t)) => t.to_string(),
             (Ty::Float, Item::Float(v)) => fmt::pr_float_stack(*v),
             _ => fmt::pr_str(it),
         }
@@ -723,12 +772,17 @@ impl Machine {
                 let $a = self.float.pop().unwrap();
             };
         }
+        // A nil on the CHAR stack makes the Clojure instruction throw (NullPointerException or
+        // "no matching method"): a no-op that has already popped its arguments.
         macro_rules! char1 {
             ($a:ident) => {
                 if self.chr.is_empty() {
                     return;
                 }
-                let $a = self.chr.pop().unwrap();
+                let $a = match self.chr.pop().unwrap() {
+                    Some(c) => c,
+                    None => return,
+                };
             };
         }
         macro_rules! char2 {
@@ -736,8 +790,12 @@ impl Machine {
                 if self.chr.len() < 2 {
                     return;
                 }
-                let $a = self.chr.pop().unwrap();
-                let $b = self.chr.pop().unwrap();
+                let a = self.chr.pop().unwrap();
+                let b = self.chr.pop().unwrap();
+                let ($a, $b) = match (a, b) {
+                    (Some(a), Some(b)) => (a, b),
+                    _ => return,
+                };
             };
         }
         macro_rules! pushf {
@@ -1113,12 +1171,12 @@ impl Machine {
             Op::CharFromInt => {
                 need!(1, 0, 0);
                 let i = self.int.pop().unwrap();
-                self.chr.push(char::from_u32(i.rem_euclid(128) as u32).unwrap());
+                self.chr.push(Some(char::from_u32(i.rem_euclid(128) as u32).unwrap()));
             }
             Op::CharFromFloat => {
                 float1!(f);
                 if let Some(l) = clj_long(f) {
-                    self.chr.push(char::from_u32(l.rem_euclid(128) as u32).unwrap());
+                    self.chr.push(Some(char::from_u32(l.rem_euclid(128) as u32).unwrap()));
                 }
             }
             Op::CharToInt => {
@@ -1127,14 +1185,19 @@ impl Machine {
             }
             Op::CharToUpper => {
                 char1!(c);
-                self.chr.push(java_upper(c));
+                self.chr.push(Some(java_upper(c)));
             }
             Op::CharToLower => {
                 char1!(c);
-                self.chr.push(java_lower(c));
+                self.chr.push(Some(java_lower(c)));
             }
+            // `(= a b)`: nil equals nil, nothing else
             Op::CharEq => {
-                char2!(a, b);
+                if self.chr.len() < 2 {
+                    return;
+                }
+                let a = self.chr.pop().unwrap();
+                let b = self.chr.pop().unwrap();
                 self.boolean.push(a == b);
             }
             // [_ a b] (< (int a) (int b)) with a the top: unlike the numeric comparators, no swap
@@ -1158,6 +1221,8 @@ impl Machine {
                     self.boolean.push(v);
                 }
             }
+            Op::Str(o) => self.run_str_op(o),
+            Op::Vec(o) => self.run_vec_op(o),
             Op::In(k) => {
                 if let Some(v) = self.inputs.get(k as usize - 1) {
                     self.exec.push(v.clone());

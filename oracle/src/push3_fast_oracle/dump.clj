@@ -54,8 +54,21 @@
           (* (if (.nextBoolean r) 1 -1) (+ 5e9 (.nextInt r 2000000000)))
           (- (.nextInt r 25) 12))))
 
+(def ^:private string-alphabet "abcxyzABCXYZ 0123456789.,-+:!_\n\t")
+
+(defn- gen-string [^java.util.Random r]
+  (let [n (if (< (.nextDouble r) 0.15) 0 (inc (.nextInt r 8)))]
+    (apply str (repeatedly n #(.charAt string-alphabet (.nextInt r (count string-alphabet)))))))
+
+(defn- gen-ivec
+  "Non-empty on purpose: an empty vector literal lands on a [:push/vector :push/clj-object] stack."
+  [^java.util.Random r]
+  (vec (repeatedly (inc (.nextInt r 5)) #(long (- (.nextInt r 21) 10)))))
+
 (defn- gen-literal [^java.util.Random r types]
   (case (nth types (.nextInt r (count types)))
+    :string (gen-string r)
+    :ivec (gen-ivec r)
     :int (gen-int r)
     :bool (.nextBoolean r)
     :float (gen-float r)
@@ -80,6 +93,27 @@
 
 (defn- stack [st k] (get-in st [:stacks k]))
 
+(def ^:private modelled-stacks
+  #{:push/integer :push/boolean :push/float :push/char :push/string :push/exec :push/print
+    [:push/vector :push/integer]})
+
+(defn final-state
+  "The comparable final state of `st`, or nil when a stack that push3-fast does not model
+  (clj-object, name, code, bignum, other vectors, ...) ended up non-empty."
+  [st]
+  (when (every? (fn [[k v]] (or (contains? modelled-stacks k) (empty? v))) (:stacks st))
+    {:int (stack st :push/integer)
+     :bool (stack st :push/boolean)
+     ;; (double x): the oracle keeps (float 1e-12) as a java.lang.Float; widened it is the exact value
+     :float (mapv double (stack st :push/float))
+     :char (stack st :push/char)
+     :string (stack st :push/string)
+     :vector_integer (stack st [:push/vector :push/integer])
+     :exec (stack st :push/exec)
+     :print (io/printed st)
+     :regs (mapv #(get-in st [:push/output (keyword (str "c" %))]) (range 8))
+     :steps (:push/num-executions st)}))
+
 (defn- run-oracle [{:keys [program inputs max]}]
   (let [t0 (System/nanoTime)
         st (-> (push/setup-state)
@@ -87,40 +121,33 @@
                (io/with-inputs inputs)
                (push/execute program {:max-executions max}))
         _ (swap! execute-ns + (- (System/nanoTime) t0))]
-    {:int (stack st :push/integer)
-     :bool (stack st :push/boolean)
-     ;; (double x): the oracle keeps (float 1e-12) as a java.lang.Float; widened it is the exact value
-     :float (mapv double (stack st :push/float))
-     :char (stack st :push/char)
-     :exec (stack st :push/exec)
-     :print (io/printed st)
-     :regs (mapv #(get-in st [:push/output (keyword (str "c" %))]) (range 8))
-     :steps (:push/num-executions st)}))
+    (final-state st)))
 
 (defn -main [n seed out names-file]
   (binding [*err* (java.io.Writer/nullWriter)]
     (let [names (string/split-lines (slurp names-file))
           ops (filterv registered? names)
           missing (remove registered? names)
-          types [:int :bool :float :char]
+          types [:int :bool :float :char :string :ivec]
           r (java.util.Random. (parse-long seed))
           n (parse-long n)
           start (System/nanoTime)
-          written (atom 0) failed (atom 0) steps (atom 0)]
+          written (atom 0) failed (atom 0) skipped (atom 0) steps (atom 0)]
       (when (seq missing) (println "not registered in the oracle:" (vec missing)))
       (with-open [w (io*/writer out)]
         (dotimes [_ n]
           (let [c (gen-case r ops types)]
             (try
-              (let [res (run-oracle c)]
-                (.write w (str (pr-str (merge c res)) "\n"))
-                (swap! written inc)
-                (swap! steps + (:steps res)))
+              (if-let [res (run-oracle c)]
+                (do (.write w (str (pr-str (merge c res)) "\n"))
+                    (swap! written inc)
+                    (swap! steps + (:steps res)))
+                (swap! skipped inc))
               (catch Throwable e (swap! failed inc))))))
       (let [dt (/ (- (System/nanoTime) start) 1e9)
             ex (/ @execute-ns 1e9)]
-        (println (format "oracle: %d programs written, %d failed, %d steps, %.2f s in total (incl. generation and printing)"
-                         @written @failed @steps dt))
+        (println (format "oracle: %d programs written, %d skipped (unmodelled stack non-empty), %d failed, %d steps, %.2f s in total (incl. generation and printing)"
+                         @written @skipped @failed @steps dt))
         (println (format "oracle execute only: %.2f s, %.0f runs/s, %.3f M steps/s (one JVM, no warmup removed)"
                          ex (/ @written ex) (/ @steps ex 1e6))))))
   (shutdown-agents))
