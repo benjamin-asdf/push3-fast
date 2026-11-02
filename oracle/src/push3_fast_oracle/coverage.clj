@@ -1,0 +1,20 @@
+(ns push3-fast-oracle.coverage
+  "Which Propeller problems are fully covered by the instructions in <names.txt>?
+  Usage: ... coverage <names.txt>. Literals and ERCs (non-keywords) are counted separately."
+  (:require
+   [benjamin-schwerdtner.problems.propeller.problems :as problems]
+   [clojure.string :as string]))
+
+(defn -main [names-file]
+  (binding [*err* (java.io.Writer/nullWriter)]
+    (let [have (set (map keyword (string/split-lines (slurp names-file))))]
+      (doseq [p problems/all-problems]
+        (let [alpha (problems/alphabet p)
+              kws (filter keyword? alpha)
+              missing (remove have kws)
+              lits (remove keyword? alpha)]
+          (println (format "%-22s %3d instructions, %3d missing, %2d literals/ERCs (types: %s)  %s"
+                           (name (:name p)) (count kws) (count missing) (count lits)
+                           (string/join "," (sort (distinct (map #(.getSimpleName (class %)) lits))))
+                           (if (empty? missing) "COVERED" (str "e.g. " (string/join " " (map name (take 4 missing)))))))))))
+  (shutdown-agents))
