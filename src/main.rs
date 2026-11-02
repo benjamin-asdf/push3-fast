@@ -44,6 +44,24 @@ fn items(e: Option<&Edn>) -> Result<Vec<Item>, String> {
     }
 }
 
+/// The expected `:vector_integer` stack as text. Unlike a literal in a program, an EMPTY vector is
+/// a normal value here (`rest` of a one-element vector), so it must not make the case unreadable.
+fn int_vector_stack(e: Option<&Edn>) -> Result<Vec<String>, String> {
+    let Some(e) = e else { return Ok(Vec::new()) };
+    e.items()
+        .ok_or("expected a vector")?
+        .iter()
+        .map(|v| match v {
+            Edn::Vector(xs) => xs
+                .iter()
+                .map(|x| if let Edn::Int(i) = x { Ok(*i) } else { Err("non-integer vector element".to_string()) })
+                .collect::<Result<Vec<i64>, String>>()
+                .map(|xs| fmt::pr_str(&Item::IntVec(std::rc::Rc::new(xs)))),
+            _ => Err("expected a vector".to_string()),
+        })
+        .collect()
+}
+
 fn parse_case(line: &str) -> Result<Case, String> {
     let e = edn::parse(line)?;
     let program = Item::from_edn(e.get("program").ok_or("missing :program")?)?;
@@ -63,7 +81,7 @@ fn parse_case(line: &str) -> Result<Case, String> {
                 float: text("float")?,
                 chr: text("char")?,
                 string: text("string")?,
-                ivec: text("vector_integer")?,
+                ivec: int_vector_stack(e.get("vector_integer"))?,
                 exec: text("exec")?,
                 print: match e.get("print") {
                     Some(Edn::Str(s)) => s.clone(),
