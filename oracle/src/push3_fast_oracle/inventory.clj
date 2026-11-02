@@ -9,11 +9,11 @@
 (defn -main [out]
   (binding [*err* (java.io.Writer/nullWriter)]
     (let [counts (frequencies (mapcat #(problems/alphabet %) problems/all-problems))
-          rows (for [[k n] (sort-by key counts)
-                     :let [i (instr/instruction k)]]
+          rows (for [[k n] (sort-by (comp str key) counts)
+                     :let [i (if (keyword? k) (instr/instruction k) :no-instruction)]]
                  (if (map? i)
                    {:name k :in (:push.instruction/in i) :out (:push.instruction/out i) :problems n}
-                   {:name k :other true :problems n}))]
+                   {:name (pr-str k) :other true :problems n}))]
       (with-open [w (io*/writer out)]
         (doseq [r rows] (.write w (str (pr-str r) "\n"))))
       (println (count rows) "symbols written")))
