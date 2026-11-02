@@ -16,7 +16,7 @@
     [(/ (- (System/nanoTime) t) 1e9) (first (:integer st))]))
 
 (defn -main [n reps]
-  (let [n (parse-long n) reps (parse-long reps)]
+  (let [n (Long/parseLong n) reps (Long/parseLong reps)]
     (dotimes [_ 3] (run1 (min n 20000)))
     (let [[best res] (first (sort-by first (repeatedly reps #(run1 n))))]
       (println (str "Clojush 3.32 (Clojure)\tcount-loop\t" n "\t" (format "%.6f" best) "\t" res))))
