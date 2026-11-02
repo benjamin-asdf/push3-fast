@@ -12,7 +12,7 @@
         (let [alpha (problems/alphabet p)
               inputs (mapcat :inputs (:train (problems/train-and-test p 5 5 0)))
               input-kinds (sort (distinct (map #(.getSimpleName (class %)) (remove #(or (number? %) (boolean? %) (string? %)
-                                                                    (and (vector? %) (seq %) (every? integer? %)))
+                                                                    (vector? %))
                                                               inputs))))
               kws (filter keyword? alpha)
               missing (remove (into have (map #(keyword (name %)) (:input-names p))) kws)

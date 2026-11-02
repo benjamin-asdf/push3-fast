@@ -120,7 +120,11 @@
   "The comparable final state of `st`, or nil when a stack that push3-fast does not model
   (clj-object, name, code, bignum, other vectors, ...) ended up non-empty."
   [st]
-  (when (every? (fn [[k v]] (or (contains? modelled-stacks k) (empty? v))) (:stacks st))
+  (when (every? (fn [[k v]] (or (contains? modelled-stacks k) (empty? v)
+                                ;; vector stacks other than integer: no implemented instruction reads
+                                ;; them, so what lands there cannot matter (push3-fast carries it as Opaque)
+                                (and (vector? k) (= :push/vector (first k)))))
+                (:stacks st))
     {:int (stack st :push/integer)
      :bool (stack st :push/boolean)
      ;; (double x): the oracle keeps (float 1e-12) as a java.lang.Float; widened it is the exact value

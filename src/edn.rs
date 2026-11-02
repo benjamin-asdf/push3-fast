@@ -205,6 +205,26 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// `pr-str` of an EDN value, for items that are only carried along (see `Item::Opaque`).
+pub fn edn_text(e: &Edn) -> String {
+    let join = |v: &[Edn]| v.iter().map(edn_text).collect::<Vec<_>>().join(" ");
+    match e {
+        Edn::Nil => "nil".into(),
+        Edn::Bool(b) => b.to_string(),
+        Edn::Int(v) => v.to_string(),
+        Edn::Float(v) => crate::fmt::pr_double(*v),
+        Edn::Char(c) => crate::fmt::pr_char(*c),
+        Edn::Str(t) => crate::fmt::pr_string(t),
+        Edn::Kw(n) => format!(":{n}"),
+        Edn::List(v) => format!("({})", join(v)),
+        Edn::Vector(v) => format!("[{}]", join(v)),
+        Edn::Map(kv) => format!(
+            "{{{}}}",
+            kv.iter().map(|(k, v)| format!("{} {}", edn_text(k), edn_text(v))).collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
 impl Item {
     /// Keywords are instruction names, lists and vectors are code lists.
     pub fn from_edn(e: &Edn) -> Result<Item, String> {
@@ -222,7 +242,8 @@ impl Item {
             Edn::Vector(v) if !v.is_empty() && v.iter().all(|x| matches!(x, Edn::Int(_))) => Ok(Item::IntVec(Rc::new(
                 v.iter().map(|x| if let Edn::Int(i) = x { *i } else { unreachable!() }).collect(),
             ))),
-            Edn::Vector(_) => Err("this vector literal is not supported".into()),
+            // any other vector (empty, of floats, ...) sits on a stack nobody reads
+            Edn::Vector(_) => Ok(Item::Opaque(Rc::from(edn_text(e).as_str()))),
             other => Err(format!("not a supported Push item yet: {other:?}")),
         }
     }

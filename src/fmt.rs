@@ -137,6 +137,7 @@ pub fn write_pr(item: &Item, out: &mut String) {
         Item::Float(v) => out.push_str(&pr_double(*v)),
         Item::Char(c) => out.push_str(&pr_char(*c)),
         Item::Nil => out.push_str("nil"),
+        Item::Opaque(t) => out.push_str(t),
         Item::Str(t) => out.push_str(&pr_string(t)),
         Item::IntVec(v) => {
             out.push('[');

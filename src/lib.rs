@@ -164,6 +164,10 @@ pub enum Item {
     Nil,
     Str(Rc<str>),
     IntVec(Rc<Vec<i64>>),
+    /// A value that the oracle pushes onto a stack no instruction reads (an empty vector, a vector
+    /// of floats, ...). Executing it only costs a step; the text is its `pr-str`, for `exec_print`
+    /// and `exec_=`.
+    Opaque(Rc<str>),
     Op(Op),
     /// A keyword that is not an instruction. It resolves to a named input (`a2`, `b0`, ...) or,
     /// in the oracle, lands on the CLJ-OBJECT stack, which this build does not model.
@@ -477,6 +481,8 @@ impl Machine {
             Item::IntVec(v) => self.ivec.push(v),
             // a nil literal goes to the CLJ-OBJECT stack in the oracle, which is not modelled
             Item::Nil => self.unsupported = true,
+            // lands on a stack that no implemented instruction reads
+            Item::Opaque(_) => {}
             Item::Name(n) => match self.named.iter().find(|(k, _)| k.as_str() == &*n) {
                 Some((_, v)) => self.exec.push(v.clone()),
                 None => self.unsupported = true,
