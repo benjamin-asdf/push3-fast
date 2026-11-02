@@ -9,26 +9,48 @@ It does not define new semantics. It reproduces those of the Clojure interpreter
 Propeller PSB1/PSB2 instruction sets), and it is tested against that interpreter on complete
 final states.
 
-## Status: stage 1
+## Status
 
 | | |
 |---|---|
-| Stacks | EXEC, INTEGER, BOOLEAN |
-| Instructions | 85 (the stack family on each of the three stacks, integer arithmetic and comparison, boolean logic, `exec_if/when/while/do_while/k/s/y/=`, `exec_do*range/count/times`), plus `in1`..`in8` |
-| Not yet | float, char, string, vectors, CODE, NAME, PRINT, output registers (stages 2 and 3) |
-| Differential test | 29,975 random programs, 0 mismatches against the oracle |
+| Stacks | EXEC, INTEGER, BOOLEAN, FLOAT, CHAR, PRINT output, output registers `c0`..`c7` |
+| Instructions | 170 (the stack family `dup`, `pop`, `swap`, `rot`, `yank`, `shove`, `print`, ... on five stacks, integer and float arithmetic, comparisons, boolean logic, char predicates, `exec_if/when/while/do_while/k/s/y/=`, `exec_do*range/count/times`), plus `in1`..`in8`, named inputs |
+| Not yet | strings, vectors, CODE, NAME (`string_*` and `vector_integer_*` are 90 of the 258 instructions the Propeller problems use) |
+| Propeller problems | 11 of 31 run completely: bouncing-balls, dice-game, gcd, snow-day, smallest, number-io, integer-regression, nguyen-f1, nguyen-f5, mul3, mul4 |
+| Differential test | 29,995 random programs and about 45,000 runs on those 11 problems' own alphabets and training cases: 0 mismatches against the oracle |
 | Dependencies | none (std only) |
 
-Speed, one thread, same 4,996 programs, 568,850 EXEC steps, on an AMD Ryzen 9 8945H laptop (8 cores / 16 threads, 14 GB RAM, Linux 7.2, OpenJDK 27, rustc 1.99; clocks scale with load):
+On the 11 problems' real alphabets and cases the Rust core runs 48-80 million EXEC steps per second
+on one thread; the Clojure oracle runs 1.3-1.5 million on the same programs.
 
-| | EXEC steps / s |
-|---|---|
-| clj-push3 (Clojure, oracle), `execute` only, JIT warm-up included | 1.05 M |
-| push3-fast | 83.6 M |
+## Benchmark: all implementations
 
-That is about 80 times. The oracle number is a single JVM run including warm-up and is
-conservative for the Clojure side; take it as an order of magnitude, not a benchmark of Clojure.
-Reproduce: `oracle/` writes the cases, `push3-fast bench` measures (below).
+One workload, `count-loop`: add 1 to a counter N times with the implementation's own loop
+instruction; the final counter must equal N (every row below checked that). Best of 5 runs after
+warm-up. Each implementation gets its own N so that its run takes at least a few milliseconds (push3-fast
+1,000,000; clj-push3, Propeller, Clojush, pushr 200,000; CPushPush 50,000; PyshGP 20,000), and the
+rate is iterations per second. Loop constructs differ (`exec_do*range` or `exec_do_range`, and
+`INDEX.DEFINE` + `EXEC.LOOP` in pushr, which does not push the index, so its body has no `integer_pop`),
+so steps per iteration differ; compare rates, not step counts. For CPushPush the time of a
+0-iteration process run is subtracted.
+
+Machine: AMD Ryzen 9 8945H (8 cores / 16 threads, a laptop: clocks scale with load and
+temperature), 14 GB RAM, Linux 7.2.11 (Arch), OpenJDK 27, rustc 1.99.1, GCC 16.2.1, Clojure CLI
+1.12.5, Python 3.9 for PyshGP. One thread each. Run it with `bench/run-all.sh`; raw rows are in
+`bench/results/`.
+
+| Implementation | Language | Iterations/s | Slower than push3-fast | Comment |
+|---|---|---:|---:|---|
+| push3-fast (Rust) | Rust | 26,455,026 | 1x | Complete: no, 170 instructions (EXEC, INTEGER, BOOLEAN, FLOAT, CHAR stacks, PRINT, output registers); 11 of the 31 Propeller problems run completely, strings and vectors are missing. Pro: fastest here, no dependencies, EDN interface, semantics pinned to clj-push3 by a differential test (29,995 random programs, 0 mismatches). Con: incomplete; sin/cos/tan differ from Java in the last digit for 0.2-0.5% of calls. |
+| pushr 0.4.1 (Rust) | Rust | 4,335,197 | 6x | Complete: no for program synthesis benchmarks. Stacks BOOLEAN, CODE, EXEC, FLOAT, INTEGER, NAME and bool/float/int vectors, INDEX, GRAPH; no CHAR or STRING stack, so the string problems cannot be expressed. Pro: second fastest here, crates.io package, configurable step, time and growth limits. Con: version 0.4.1 is from 2022-12-30; looping uses EXEC.LOOP with an INDEX stack, not DO*RANGE. |
+| CPushPush (C++) | C++ | 1,844,678 | 14x | Complete: unknown; README lists Exec, Integer, Code, Boolean, Float, Name stacks and no string or char stack. Pro: fast, interpreter and PushGP in one code base, GPL-2.0. Con: last commit 2017-08-21; needed a one-line patch (operator<< for std::valarray in Literal.h) and make flags that skip autotools regeneration to build with GCC 16.2; runpush stops after 1,000,000 steps. |
+| Clojush 3.32 (Clojure) | Clojure | 436,450 | 61x | Complete: yes, the original research system (instruction set not counted here). Pro: PushGP plus a collection of benchmark problems in one code base; used in research since 2010. Con: Clojure 1.10 and Leiningen; run limits are global atoms; last commit in the clone 2023-05-06. |
+| clj-push3 perf branch (Clojure) | Clojure | 362,518 | 73x | Complete: as clj-push3 (same instructions; identical error vectors in a seeded comparison on six problems). Pro: faster than base for the same semantics. Con: an unmerged branch (direct get/assoc in the stack operations and in execute-instruction/execute-1), still far behind push3-fast. |
+| Propeller (Clojure) | Clojure | 245,417 | 108x | Complete: yes, it defines the PSB1/PSB2 problems and instruction sets. Pro: PushGP with lexicase selection, ClojureScript build, the reference for the benchmark suites. Con: slow on this workload; the state is a persistent map. |
+| clj-push3 base (Clojure) | Clojure | 226,078 | 117x | Complete: yes for Propeller: 525 instructions, all 362 Propeller instructions have an equivalent. Pro: the reference semantics of this project and the test oracle for push3-fast; instructions are plain data (:in, :out, :f). Con: slow; integer_div returns a Clojure BigInt, so integer_print shows e.g. 5N. |
+| PyshGP 0.1.8 (Python) | Python | 17,069 | 1,550x | Complete: 429 core instructions register; not compared with the PSB sets. Pro: Python, easy to combine with ML pipelines. Con: needs Python 3.9 or older (the current release imports collections.Sequence, removed in 3.10; 3.9 is end-of-life since October 2025), which blocks modern environments; slowest by far. |
+
+The ratios, not the absolute numbers, are the result: a different machine moves all rows together.
 
 ## Prior work
 
@@ -44,8 +66,8 @@ Push is Lee Spector's language; the specification is the
 - [pushr](https://docs.rs/crate/pushr/latest) (Rust, version 0.4.1 released 2022-12-30): a Push
   interpreter with vector types; its page makes no speed claims either.
 
-We have not benchmarked these against each other, and we do not claim to be the first fast
-Push. What this repository adds is checkable: semantics pinned to one reference interpreter by a
+All of them are in the table above. We do not claim to be the first fast Push. What this
+repository adds is checkable: semantics pinned to one reference interpreter by a
 differential test on complete final states, an EDN interface that speaks the data Push programs
 already are, and no dependencies.
 
@@ -82,9 +104,9 @@ place, `yank` taking `(int index)` and treating out-of-range indices as a no-op 
 
 ## Roadmap
 
-1. Stage 1 (this): EXEC, INTEGER, BOOLEAN. Done.
-2. Float, char, string, vectors, PRINT, output registers, NAME, and the remaining instructions
-   used by the 31 Propeller problems (324 symbols, 258 of them real instructions).
+1. Stages 1 and 2a: EXEC, INTEGER, BOOLEAN, FLOAT, CHAR, PRINT, registers. Done.
+2. Strings (53 instructions), `vector_integer` (37) and NAME, the rest of the 31 Propeller
+   problems (324 symbols, 258 of them real instructions).
 3. Early exit on the first failed case, case downsampling, parallel evaluation.
 4. Python bindings.
 

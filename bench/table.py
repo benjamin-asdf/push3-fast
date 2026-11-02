@@ -40,7 +40,7 @@ INFO = {
     ),
     "clj-push3 perf": (
         "Clojure",
-        "Complete: as clj-push3 (same instructions, same results on the differential test). "
+        "Complete: as clj-push3 (same instructions; identical error vectors in a seeded comparison on six problems). "
         "Pro: faster than base for the same semantics. Con: an unmerged branch (direct get/assoc in the stack "
         "operations and in execute-instruction/execute-1), still far behind push3-fast.",
     ),
