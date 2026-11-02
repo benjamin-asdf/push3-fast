@@ -264,3 +264,60 @@ impl Machine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{edn, Item, Machine};
+
+    fn run(src: &str) -> Machine {
+        let e = edn::parse(src).expect("edn");
+        let p = Item::from_edn(&e).expect("item");
+        let mut m = Machine::new(p, Vec::new());
+        m.run(1000);
+        m
+    }
+
+    fn vecs(m: &Machine) -> Vec<Vec<i64>> {
+        m.ivec.iter().map(|v| (**v).clone()).collect()
+    }
+
+    #[test]
+    fn concat_puts_second_before_top() {
+        let m = run("([1 2] [3] :vector_integer_concat)");
+        assert_eq!(vecs(&m), vec![vec![1, 2, 3]]);
+    }
+
+    #[test]
+    fn shove_on_vector_stack_pops_and_does_nothing() {
+        let m = run("([1] [2] 0 :vector_integer_shove)");
+        assert_eq!(vecs(&m), vec![vec![1]]);
+        assert!(m.int.is_empty());
+    }
+
+    #[test]
+    fn set_on_empty_vector_keeps_it() {
+        let m = run("(:vector_integer_emptyvector 7 3 :vector_integer_set)");
+        assert_eq!(vecs(&m), vec![Vec::<i64>::new()]);
+        assert!(m.int.is_empty());
+    }
+
+    #[test]
+    fn subvec_and_take_clamp_their_arguments() {
+        let m = run("([1 2 3 4] 9 -5 :vector_integer_subvec)");
+        assert_eq!(vecs(&m), vec![vec![1, 2, 3, 4]]);
+        let m = run("([1 2 3 4] -3 :vector_integer_take)");
+        assert_eq!(vecs(&m), vec![Vec::<i64>::new()]);
+    }
+
+    #[test]
+    fn pushall_leaves_first_element_on_top() {
+        let m = run("([1 2 3] :vector_integer_pushall)");
+        assert_eq!(m.int, vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn iterate_runs_body_per_element() {
+        let m = run("([1 2 3] :vector_integer_iterate :integer_inc)");
+        assert_eq!(m.int, vec![2, 3, 4]);
+    }
+}
