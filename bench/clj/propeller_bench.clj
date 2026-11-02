@@ -1,7 +1,12 @@
 ;; Workload "count-loop" on Propeller (Clojure): same task with :exec_do_range.
 ;; usage: clojure -M:propeller propeller_bench.clj <N> <repetitions>
 (require '[propeller.push.interpreter :as interp]
-         '[propeller.push.state :as state])
+         '[propeller.push.state :as state]
+         ;; instructions register themselves when their namespace is loaded
+         'propeller.push.instructions.bool 'propeller.push.instructions.character
+         'propeller.push.instructions.code 'propeller.push.instructions.input-output
+         'propeller.push.instructions.numeric 'propeller.push.instructions.polymorphic
+         'propeller.push.instructions.string 'propeller.push.instructions.vector)
 (let [[n reps] *command-line-args*
       n (parse-long n) reps (parse-long reps)
       run1 (fn [n] (let [program (list 0 0 (dec n) :exec_do_range (list :integer_pop 1 :integer_add))
