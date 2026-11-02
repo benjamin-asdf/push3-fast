@@ -1,3 +1,4 @@
+//! push3-fast names                       the implemented instruction names, one per line
 //! push3-fast run                         EDN cases on stdin, EDN results on stdout (one per line)
 //! push3-fast diff  <cases.edn>           compare final states with the recorded oracle states
 //! push3-fast bench <cases.edn> [reps]    EXEC steps per second
@@ -6,6 +7,7 @@
 //! oracle's final state `{:int [...] :bool [...] :exec [...] :steps n}`.
 
 use push3_fast::edn::{self, Edn};
+use push3_fast::fmt;
 use push3_fast::{Item, Machine};
 use std::io::{BufRead, Write};
 use std::time::Instant;
@@ -17,11 +19,16 @@ struct Case {
     want: Option<State>,
 }
 
+/// A final state in its text form, so that comparison is exactly "prints the same" (NaN included).
 #[derive(PartialEq, Debug)]
 struct State {
     int: Vec<i64>,
     boolean: Vec<bool>,
-    exec: Vec<Item>,
+    float: Vec<String>,
+    chr: Vec<String>,
+    exec: Vec<String>,
+    print: String,
+    regs: Vec<String>,
     steps: u64,
 }
 
@@ -44,10 +51,26 @@ fn parse_case(line: &str) -> Result<Case, String> {
         Some(Edn::Int(steps)) => {
             let ints = items(e.get("int"))?;
             let bools = items(e.get("bool"))?;
+            let text = |k: &str| -> Result<Vec<String>, String> { Ok(items(e.get(k))?.iter().map(fmt::pr_str).collect()) };
             Some(State {
                 int: ints.iter().map(|i| if let Item::Int(v) = i { *v } else { unreachable!() }).collect(),
                 boolean: bools.iter().map(|i| if let Item::Bool(v) = i { *v } else { unreachable!() }).collect(),
-                exec: items(e.get("exec"))?,
+                float: text("float")?,
+                chr: text("char")?,
+                exec: text("exec")?,
+                print: match e.get("print") {
+                    Some(Edn::Str(s)) => s.clone(),
+                    None => String::new(),
+                    _ => return Err(":print must be a string".into()),
+                },
+                regs: match e.get("regs") {
+                    Some(r) => r.items().ok_or(":regs must be a vector")?.iter().map(|x| match x {
+                        Edn::Nil => "nil".to_string(),
+                        Edn::Bool(b) => b.to_string(),
+                        _ => "?".to_string(),
+                    }).collect(),
+                    None => vec!["nil".to_string(); 8],
+                },
                 steps: *steps as u64,
             })
         }
@@ -59,23 +82,31 @@ fn parse_case(line: &str) -> Result<Case, String> {
 fn run_case(c: &Case) -> State {
     let mut m = Machine::new(c.program.clone(), c.inputs.clone());
     m.run(c.max);
-    State { int: m.int, boolean: m.boolean, exec: m.exec, steps: m.steps }
+    State {
+        int: m.int,
+        boolean: m.boolean,
+        float: m.float.iter().map(|v| fmt::pr_double(*v)).collect(),
+        chr: m.chr.iter().map(|c| fmt::pr_char(*c)).collect(),
+        exec: m.exec.iter().map(fmt::pr_str).collect(),
+        print: m.print,
+        regs: m.regs.iter().map(|r| r.map_or("nil".to_string(), |b| b.to_string())).collect(),
+        steps: m.steps,
+    }
 }
 
 fn write_state(s: &State) -> String {
-    let mut out = String::from("{:int [");
-    out.push_str(&s.int.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
-    out.push_str("] :bool [");
-    out.push_str(&s.boolean.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
-    out.push_str("] :exec [");
-    for (i, it) in s.exec.iter().enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        it.write_edn(&mut out);
-    }
-    out.push_str(&format!("] :steps {}}}", s.steps));
-    out
+    let join = |v: &[String]| v.join(" ");
+    format!(
+        "{{:int [{}] :bool [{}] :float [{}] :char [{}] :exec [{}] :print {} :regs [{}] :steps {}}}",
+        s.int.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "),
+        s.boolean.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "),
+        join(&s.float),
+        join(&s.chr),
+        join(&s.exec),
+        fmt::pr_string(&s.print),
+        join(&s.regs),
+        s.steps
+    )
 }
 
 fn load(path: &str) -> Vec<Case> {
@@ -95,6 +126,11 @@ fn main() {
 fn real_main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("names") => {
+            for n in push3_fast::all_names() {
+                println!("{n}");
+            }
+        }
         Some("run") => {
             let stdout = std::io::stdout();
             let mut out = stdout.lock();

@@ -1,11 +1,12 @@
-#![allow(unused_comparisons)]
-//! Fast Push3 core. Stage 1 (spike): EXEC, INTEGER and BOOLEAN stacks, literals, inputs.
+//! Fast Push3 core. Stage 2a: EXEC, INTEGER, BOOLEAN, FLOAT, CHAR, PRINT, output registers.
 //!
 //! The semantics are those of the Clojure interpreter in clj-push3, quirks included
-//! (argument order, clamping to +-1e10, `rot`, `yank` index handling). That interpreter is the
-//! test oracle: `push3-fast diff <cases.edn>` compares complete final states against it.
+//! (argument order, clamping, `rot`, `yank` index handling, how FLOAT values are sanitised).
+//! That interpreter is the test oracle: `push3-fast diff <cases.edn>` compares complete final
+//! states against it.
 
 pub mod edn;
+pub mod fmt;
 
 use std::rc::Rc;
 
@@ -17,11 +18,28 @@ pub fn clamp(v: i128) -> i64 {
     v.clamp(-(LIM as i128), LIM as i128) as i64
 }
 
+/// `(float 1e-12)`: a java.lang.Float, widened. This is what every FLOAT value with |x| < 1e-12
+/// (zero included, sign lost) becomes when pushed.
+pub const TINY: f64 = 1e-12_f32 as f64;
+
+/// `sanitize-value :push/float`: clamp to +-1e12 (NaN propagates), tiny values become TINY.
+#[inline]
+pub fn sanitize_float(v: f64) -> f64 {
+    let v = if v.is_nan() { v } else { v.clamp(-1e12, 1e12) };
+    if v.abs() < 1e-12 {
+        TINY
+    } else {
+        v
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ty {
     Int,
     Bool,
     Exec,
+    Float,
+    Char,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -39,6 +57,7 @@ pub enum Fam {
     DupTimes,
     DupItems,
     DeepDup,
+    Print,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +79,8 @@ pub enum Op {
     IntMin,
     IntMax,
     IntFromBool,
+    IntFromFloat,
+    IntFromChar,
     BoolAnd,
     BoolOr,
     BoolNot,
@@ -71,6 +92,7 @@ pub enum Op {
     BoolNor,
     BoolXnor,
     BoolFromInt,
+    BoolFromFloat,
     ExecIf,
     ExecWhen,
     ExecWhile,
@@ -82,6 +104,43 @@ pub enum Op {
     ExecDoCount,
     ExecDoTimes,
     ExecEq,
+    FloatAdd,
+    FloatSub,
+    FloatMul,
+    FloatDiv,
+    FloatMod,
+    FloatQuot,
+    FloatInc,
+    FloatDec,
+    FloatLt,
+    FloatGt,
+    FloatEq,
+    FloatGte,
+    FloatLte,
+    FloatMin,
+    FloatMax,
+    FloatFromBool,
+    FloatFromInt,
+    FloatFromChar,
+    FloatSin,
+    FloatCos,
+    FloatTan,
+    CharIsLetter,
+    CharIsDigit,
+    CharIsWhitespace,
+    CharIsUpper,
+    CharIsLower,
+    CharFromInt,
+    CharFromFloat,
+    CharToInt,
+    CharToUpper,
+    CharToLower,
+    CharEq,
+    CharLt,
+    CharGt,
+    PrintNewline,
+    SetC(u8),
+    C(u8),
     In(u8),
 }
 
@@ -89,11 +148,13 @@ pub enum Op {
 pub enum Item {
     Int(i64),
     Bool(bool),
+    Float(f64),
+    Char(char),
     Op(Op),
     List(Rc<Vec<Item>>),
 }
 
-const FAMS: [(&str, Fam); 13] = [
+const FAMS: [(&str, Fam); 14] = [
     ("stackdepth", Fam::StackDepth),
     ("pop", Fam::Pop),
     ("dup", Fam::Dup),
@@ -107,10 +168,17 @@ const FAMS: [(&str, Fam); 13] = [
     ("dup_times", Fam::DupTimes),
     ("dup_items", Fam::DupItems),
     ("deep_dup", Fam::DeepDup),
+    ("print", Fam::Print),
 ];
-const TYS: [(&str, Ty); 3] = [("integer", Ty::Int), ("boolean", Ty::Bool), ("exec", Ty::Exec)];
+const TYS: [(&str, Ty); 5] = [
+    ("integer", Ty::Int),
+    ("boolean", Ty::Bool),
+    ("exec", Ty::Exec),
+    ("float", Ty::Float),
+    ("char", Ty::Char),
+];
 
-const PLAIN: [(&str, Op); 38] = [
+const PLAIN: &[(&str, Op)] = &[
     ("integer_+", Op::IntAdd),
     ("integer_-", Op::IntSub),
     ("integer_*", Op::IntMul),
@@ -127,6 +195,8 @@ const PLAIN: [(&str, Op); 38] = [
     ("integer_min", Op::IntMin),
     ("integer_max", Op::IntMax),
     ("integer_fromboolean", Op::IntFromBool),
+    ("integer_fromfloat", Op::IntFromFloat),
+    ("integer_fromchar", Op::IntFromChar),
     ("boolean_and", Op::BoolAnd),
     ("boolean_or", Op::BoolOr),
     ("boolean_not", Op::BoolNot),
@@ -138,6 +208,7 @@ const PLAIN: [(&str, Op); 38] = [
     ("boolean_nor", Op::BoolNor),
     ("boolean_xnor", Op::BoolXnor),
     ("boolean_frominteger", Op::BoolFromInt),
+    ("boolean_fromfloat", Op::BoolFromFloat),
     ("exec_if", Op::ExecIf),
     ("exec_when", Op::ExecWhen),
     ("exec_while", Op::ExecWhile),
@@ -149,6 +220,41 @@ const PLAIN: [(&str, Op); 38] = [
     ("exec_do*count", Op::ExecDoCount),
     ("exec_do*times", Op::ExecDoTimes),
     ("exec_=", Op::ExecEq),
+    ("float_+", Op::FloatAdd),
+    ("float_-", Op::FloatSub),
+    ("float_*", Op::FloatMul),
+    ("float_div", Op::FloatDiv),
+    ("float_mod", Op::FloatMod),
+    ("float_quot", Op::FloatQuot),
+    ("float_inc", Op::FloatInc),
+    ("float_dec", Op::FloatDec),
+    ("float_<", Op::FloatLt),
+    ("float_>", Op::FloatGt),
+    ("float_=", Op::FloatEq),
+    ("float_>=", Op::FloatGte),
+    ("float_<=", Op::FloatLte),
+    ("float_min", Op::FloatMin),
+    ("float_max", Op::FloatMax),
+    ("float_fromboolean", Op::FloatFromBool),
+    ("float_frominteger", Op::FloatFromInt),
+    ("float_fromchar", Op::FloatFromChar),
+    ("float_sin", Op::FloatSin),
+    ("float_cos", Op::FloatCos),
+    ("float_tan", Op::FloatTan),
+    ("char_is_letter", Op::CharIsLetter),
+    ("char_is_digit", Op::CharIsDigit),
+    ("char_is_whitespace", Op::CharIsWhitespace),
+    ("char_is_uppercase", Op::CharIsUpper),
+    ("char_is_lowercase", Op::CharIsLower),
+    ("char_from_integer", Op::CharFromInt),
+    ("char_from_float", Op::CharFromFloat),
+    ("char_to_integer", Op::CharToInt),
+    ("char_to_uppercase", Op::CharToUpper),
+    ("char_to_lowercase", Op::CharToLower),
+    ("char_=", Op::CharEq),
+    ("char_<", Op::CharLt),
+    ("char_>", Op::CharGt),
+    ("print_newline", Op::PrintNewline),
 ];
 
 impl Op {
@@ -156,12 +262,18 @@ impl Op {
         if let Some((_, op)) = PLAIN.iter().find(|(n, _)| *n == name) {
             return Some(*op);
         }
-        if let Some(rest) = name.strip_prefix("in") {
-            if let Ok(k) = rest.parse::<u8>() {
-                if (1..=8).contains(&k) {
-                    return Some(Op::In(k));
-                }
-            }
+        let indexed = |prefix: &str, max: u8, lo: u8| -> Option<u8> {
+            let k = name.strip_prefix(prefix)?.parse::<u8>().ok()?;
+            (lo..=max).contains(&k).then_some(k)
+        };
+        if let Some(k) = indexed("in", 8, 1) {
+            return Some(Op::In(k));
+        }
+        if let Some(k) = indexed("set_c", 7, 0) {
+            return Some(Op::SetC(k));
+        }
+        if let Some(k) = indexed("c", 7, 0) {
+            return Some(Op::C(k));
         }
         for (tn, ty) in TYS {
             if let Some(rest) = name.strip_prefix(tn).and_then(|r| r.strip_prefix('_')) {
@@ -179,6 +291,8 @@ impl Op {
         }
         match self {
             Op::In(k) => format!("in{k}"),
+            Op::SetC(k) => format!("set_c{k}"),
+            Op::C(k) => format!("c{k}"),
             Op::Fam(f, t) => {
                 let tn = TYS.iter().find(|(_, x)| x == t).unwrap().0;
                 let fname = FAMS.iter().find(|(_, x)| x == f).unwrap().0;
@@ -189,19 +303,117 @@ impl Op {
     }
 }
 
+/// Every instruction name this build implements (one per line in `push3-fast names`).
+pub fn all_names() -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    for (tn, _) in TYS {
+        for (fname, _) in FAMS {
+            v.push(format!("{tn}_{fname}"));
+        }
+    }
+    v.extend(PLAIN.iter().map(|(n, _)| n.to_string()));
+    v.extend((1..=8).map(|k| format!("in{k}")));
+    v.extend((0..8).map(|k| format!("set_c{k}")));
+    v.extend((0..8).map(|k| format!("c{k}")));
+    v
+}
+
 pub struct Machine {
     pub exec: Vec<Item>,
     pub int: Vec<i64>,
     pub boolean: Vec<bool>,
+    pub float: Vec<f64>,
+    pub chr: Vec<char>,
+    /// Everything printed so far (the oracle keeps it as the single item of the PRINT stack).
+    pub print: String,
+    /// Output registers c0..c7; `None` while unset.
+    pub regs: [Option<bool>; 8],
     pub inputs: Vec<Item>,
     pub steps: u64,
 }
 
 const MAX_STACK_ITEMS: i64 = 1000;
 
+/// Java's Character predicates, exact for ASCII and approximated by Unicode properties above.
+fn is_java_whitespace(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | '\u{1c}'..='\u{1f}' | ' ')
+        || (!c.is_ascii() && c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}'))
+}
+
+fn java_upper(c: char) -> char {
+    if c.is_ascii() {
+        c.to_ascii_uppercase()
+    } else {
+        let mut u = c.to_uppercase();
+        match (u.next(), u.next()) {
+            (Some(x), None) => x,
+            _ => c,
+        }
+    }
+}
+
+fn java_lower(c: char) -> char {
+    if c.is_ascii() {
+        c.to_ascii_lowercase()
+    } else {
+        let mut u = c.to_lowercase();
+        match (u.next(), u.next()) {
+            (Some(x), None) => x,
+            _ => c,
+        }
+    }
+}
+
+/// Clojure `rem` on doubles: `n - (long)(n/d) * d` (not fmod). `None` where Clojure throws.
+fn clj_rem(n: f64, d: f64) -> Option<f64> {
+    let q = n / d;
+    if q.is_nan() || q.is_infinite() {
+        return None;
+    }
+    Some(n - q.trunc() * d)
+}
+
+/// Clojure `quot` on doubles; `None` where Clojure throws.
+fn clj_quot(n: f64, d: f64) -> Option<f64> {
+    let q = n / d;
+    if q.is_nan() || q.is_infinite() {
+        return None;
+    }
+    Some(q.trunc())
+}
+
+/// Clojure `mod` on doubles.
+fn clj_mod(n: f64, d: f64) -> Option<f64> {
+    let m = clj_rem(n, d)?;
+    if m == 0.0 || ((n > 0.0) == (d > 0.0)) {
+        Some(m)
+    } else {
+        Some(m + d)
+    }
+}
+
+/// `(long x)` on a double: throws outside the long range, NaN gives 0.
+fn clj_long(x: f64) -> Option<i64> {
+    if x < i64::MIN as f64 || x > i64::MAX as f64 {
+        None
+    } else {
+        Some(x as i64)
+    }
+}
+
 impl Machine {
     pub fn new(program: Item, inputs: Vec<Item>) -> Machine {
-        Machine { exec: vec![program], int: Vec::new(), boolean: Vec::new(), inputs, steps: 0 }
+        Machine {
+            exec: vec![program],
+            int: Vec::new(),
+            boolean: Vec::new(),
+            float: Vec::new(),
+            chr: Vec::new(),
+            print: String::new(),
+            regs: [None; 8],
+            inputs,
+            steps: 0,
+        }
     }
 
     /// Runs until the EXEC stack is empty or `max_steps` EXEC pops have happened.
@@ -222,6 +434,8 @@ impl Machine {
             Item::Op(op) => self.run_op(op),
             Item::Int(v) => self.int.push(clamp(v as i128)),
             Item::Bool(b) => self.boolean.push(b),
+            Item::Float(v) => self.float.push(sanitize_float(v)),
+            Item::Char(c) => self.chr.push(c),
             Item::List(l) => {
                 for it in l.iter().rev() {
                     self.exec.push(it.clone());
@@ -235,6 +449,8 @@ impl Machine {
             Ty::Int => self.int.len(),
             Ty::Bool => self.boolean.len(),
             Ty::Exec => self.exec.len(),
+            Ty::Float => self.float.len(),
+            Ty::Char => self.chr.len(),
         }
     }
 
@@ -243,6 +459,8 @@ impl Machine {
             Ty::Int => Item::Int(self.int[i]),
             Ty::Bool => Item::Bool(self.boolean[i]),
             Ty::Exec => self.exec[i].clone(),
+            Ty::Float => Item::Float(self.float[i]),
+            Ty::Char => Item::Char(self.chr[i]),
         }
     }
 
@@ -250,6 +468,8 @@ impl Machine {
         match (t, it) {
             (Ty::Int, Item::Int(v)) => self.int.push(clamp(v as i128)),
             (Ty::Bool, Item::Bool(b)) => self.boolean.push(b),
+            (Ty::Float, Item::Float(v)) => self.float.push(sanitize_float(v)),
+            (Ty::Char, Item::Char(c)) => self.chr.push(c),
             (Ty::Exec, it) => self.exec.push(it),
             _ => unreachable!(),
         }
@@ -260,6 +480,8 @@ impl Machine {
             Ty::Int => Item::Int(self.int.pop().unwrap()),
             Ty::Bool => Item::Bool(self.boolean.pop().unwrap()),
             Ty::Exec => self.exec.pop().unwrap(),
+            Ty::Float => Item::Float(self.float.pop().unwrap()),
+            Ty::Char => Item::Char(self.chr.pop().unwrap()),
         }
     }
 
@@ -267,6 +489,8 @@ impl Machine {
         match (t, it) {
             (Ty::Int, Item::Int(v)) => self.int.insert(idx, clamp(v as i128)),
             (Ty::Bool, Item::Bool(b)) => self.boolean.insert(idx, b),
+            (Ty::Float, Item::Float(v)) => self.float.insert(idx, sanitize_float(v)),
+            (Ty::Char, Item::Char(c)) => self.chr.insert(idx, c),
             (Ty::Exec, it) => self.exec.insert(idx, it),
             _ => unreachable!(),
         }
@@ -277,6 +501,8 @@ impl Machine {
             Ty::Int => Item::Int(self.int.remove(idx)),
             Ty::Bool => Item::Bool(self.boolean.remove(idx)),
             Ty::Exec => self.exec.remove(idx),
+            Ty::Float => Item::Float(self.float.remove(idx)),
+            Ty::Char => Item::Char(self.chr.remove(idx)),
         }
     }
 
@@ -285,6 +511,8 @@ impl Machine {
             Ty::Int => self.int.clear(),
             Ty::Bool => self.boolean.clear(),
             Ty::Exec => self.exec.clear(),
+            Ty::Float => self.float.clear(),
+            Ty::Char => self.chr.clear(),
         }
     }
 
@@ -294,6 +522,15 @@ impl Machine {
             self.int.len() >= 2
         } else {
             !self.int.is_empty() && self.len(t) > 0
+        }
+    }
+
+    /// `print-form`: strings and chars print as themselves, everything else through `pr-str`.
+    fn print_form(t: Ty, it: &Item) -> String {
+        match (t, it) {
+            (Ty::Char, Item::Char(c)) => c.to_string(),
+            (Ty::Float, Item::Float(v)) => fmt::pr_float_stack(*v),
+            _ => fmt::pr_str(it),
         }
     }
 
@@ -338,6 +575,13 @@ impl Machine {
             Fam::Empty => {
                 let e = self.len(t) == 0;
                 self.boolean.push(e);
+            }
+            Fam::Print => {
+                if self.len(t) >= 1 {
+                    let it = self.pop_item(t);
+                    let s = Self::print_form(t, &it);
+                    self.print.push_str(&s);
+                }
             }
             Fam::Shove => {
                 let ok = if t == Ty::Int { self.int.len() >= 2 } else { self.len(t) >= 1 && !self.int.is_empty() };
@@ -448,6 +692,45 @@ impl Machine {
                 let $b = self.boolean.pop().unwrap();
             };
         }
+        macro_rules! float2 {
+            ($a:ident, $b:ident) => {
+                if self.float.len() < 2 {
+                    return;
+                }
+                let $a = self.float.pop().unwrap();
+                let $b = self.float.pop().unwrap();
+            };
+        }
+        macro_rules! float1 {
+            ($a:ident) => {
+                if self.float.is_empty() {
+                    return;
+                }
+                let $a = self.float.pop().unwrap();
+            };
+        }
+        macro_rules! char1 {
+            ($a:ident) => {
+                if self.chr.is_empty() {
+                    return;
+                }
+                let $a = self.chr.pop().unwrap();
+            };
+        }
+        macro_rules! char2 {
+            ($a:ident, $b:ident) => {
+                if self.chr.len() < 2 {
+                    return;
+                }
+                let $a = self.chr.pop().unwrap();
+                let $b = self.chr.pop().unwrap();
+            };
+        }
+        macro_rules! pushf {
+            ($v:expr) => {
+                self.float.push(sanitize_float($v))
+            };
+        }
         match op {
             Op::Fam(f, t) => self.family(f, t),
             Op::IntAdd => {
@@ -526,6 +809,16 @@ impl Machine {
                 let b = self.boolean.pop().unwrap();
                 self.int.push(b as i64);
             }
+            Op::IntFromFloat => {
+                float1!(x);
+                if let Some(v) = clj_long(x) {
+                    self.int.push(clamp(v as i128));
+                }
+            }
+            Op::IntFromChar => {
+                char1!(c);
+                self.int.push(c as i64);
+            }
             Op::BoolAnd => {
                 bool2!(a, b);
                 self.boolean.push(a && b);
@@ -567,6 +860,10 @@ impl Machine {
                 need!(1, 0, 0);
                 let a = self.int.pop().unwrap();
                 self.boolean.push(a != 0);
+            }
+            Op::BoolFromFloat => {
+                float1!(x);
+                self.boolean.push(x != 0.0);
             }
             // in [boolean exec exec]: the top EXEC item is `alternative`, the one below `consequent`.
             Op::ExecIf => {
@@ -677,6 +974,175 @@ impl Machine {
                 let a = self.exec.pop().unwrap();
                 let b = self.exec.pop().unwrap();
                 self.boolean.push(a == b);
+            }
+            // FLOAT. Same argument convention as INTEGER: `a` top, `b` second.
+            Op::FloatAdd => {
+                float2!(a, b);
+                pushf!(a + b);
+            }
+            Op::FloatSub => {
+                float2!(a, b);
+                pushf!(b - a);
+            }
+            Op::FloatMul => {
+                float2!(a, b);
+                pushf!(a * b);
+            }
+            Op::FloatDiv => {
+                float2!(a, b);
+                if a != 0.0 {
+                    pushf!(b / a);
+                }
+            }
+            Op::FloatMod => {
+                float2!(a, b);
+                if a != 0.0 {
+                    if let Some(m) = clj_mod(b, a) {
+                        pushf!(m);
+                    }
+                }
+            }
+            Op::FloatQuot => {
+                float2!(a, b);
+                if a != 0.0 {
+                    if let Some(q) = clj_quot(b, a) {
+                        pushf!(q);
+                    }
+                }
+            }
+            Op::FloatInc => {
+                float1!(a);
+                pushf!(a + 1.0);
+            }
+            Op::FloatDec => {
+                float1!(a);
+                pushf!(a - 1.0);
+            }
+            Op::FloatLt => {
+                float2!(a, b);
+                self.boolean.push(b < a);
+            }
+            Op::FloatGt => {
+                float2!(a, b);
+                self.boolean.push(b > a);
+            }
+            Op::FloatEq => {
+                float2!(a, b);
+                self.boolean.push(a == b);
+            }
+            Op::FloatGte => {
+                float2!(a, b);
+                self.boolean.push(b >= a);
+            }
+            Op::FloatLte => {
+                float2!(a, b);
+                self.boolean.push(b <= a);
+            }
+            // Numbers.min/max(double,double): NaN wins, otherwise `x<y ? x : y` / `x>y ? x : y`
+            Op::FloatMin => {
+                float2!(a, b);
+                let r = if a.is_nan() { a } else if b.is_nan() { b } else if a < b { a } else { b };
+                pushf!(r);
+            }
+            Op::FloatMax => {
+                float2!(a, b);
+                let r = if a.is_nan() { a } else if b.is_nan() { b } else if a > b { a } else { b };
+                pushf!(r);
+            }
+            Op::FloatFromBool => {
+                need!(0, 1, 0);
+                let b = self.boolean.pop().unwrap();
+                pushf!(if b { 1.0 } else { 0.0 });
+            }
+            Op::FloatFromInt => {
+                need!(1, 0, 0);
+                let v = self.int.pop().unwrap();
+                pushf!(v as f64);
+            }
+            Op::FloatFromChar => {
+                char1!(c);
+                pushf!(c as u32 as f64);
+            }
+            Op::FloatSin => {
+                float1!(x);
+                pushf!(x.sin());
+            }
+            Op::FloatCos => {
+                float1!(x);
+                pushf!(x.cos());
+            }
+            Op::FloatTan => {
+                float1!(x);
+                pushf!(x.tan());
+            }
+            // CHAR
+            Op::CharIsLetter => {
+                char1!(c);
+                self.boolean.push(if c.is_ascii() { c.is_ascii_alphabetic() } else { c.is_alphabetic() });
+            }
+            Op::CharIsDigit => {
+                char1!(c);
+                self.boolean.push(if c.is_ascii() { c.is_ascii_digit() } else { c.is_numeric() });
+            }
+            Op::CharIsWhitespace => {
+                char1!(c);
+                self.boolean.push(is_java_whitespace(c));
+            }
+            Op::CharIsUpper => {
+                char1!(c);
+                self.boolean.push(c.is_uppercase());
+            }
+            Op::CharIsLower => {
+                char1!(c);
+                self.boolean.push(c.is_lowercase());
+            }
+            Op::CharFromInt => {
+                need!(1, 0, 0);
+                let i = self.int.pop().unwrap();
+                self.chr.push(char::from_u32(i.rem_euclid(128) as u32).unwrap());
+            }
+            Op::CharFromFloat => {
+                float1!(f);
+                if let Some(l) = clj_long(f) {
+                    self.chr.push(char::from_u32(l.rem_euclid(128) as u32).unwrap());
+                }
+            }
+            Op::CharToInt => {
+                char1!(c);
+                self.int.push(c as i64);
+            }
+            Op::CharToUpper => {
+                char1!(c);
+                self.chr.push(java_upper(c));
+            }
+            Op::CharToLower => {
+                char1!(c);
+                self.chr.push(java_lower(c));
+            }
+            Op::CharEq => {
+                char2!(a, b);
+                self.boolean.push(a == b);
+            }
+            // [_ a b] (< (int a) (int b)) with a the top: unlike the numeric comparators, no swap
+            Op::CharLt => {
+                char2!(a, b);
+                self.boolean.push((a as u32) < (b as u32));
+            }
+            Op::CharGt => {
+                char2!(a, b);
+                self.boolean.push((a as u32) > (b as u32));
+            }
+            Op::PrintNewline => self.print.push('\n'),
+            // in [boolean]
+            Op::SetC(k) => {
+                need!(0, 1, 0);
+                let v = self.boolean.pop().unwrap();
+                self.regs[k as usize] = Some(v);
+            }
+            Op::C(k) => {
+                if let Some(v) = self.regs[k as usize] {
+                    self.boolean.push(v);
+                }
             }
             Op::In(k) => {
                 if let Some(v) = self.inputs.get(k as usize - 1) {
