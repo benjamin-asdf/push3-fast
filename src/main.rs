@@ -223,6 +223,7 @@ fn real_main() {
         }
         Some("diff") => {
             let cases = load(args.get(2).expect("cases.edn"));
+            let show: usize = std::env::var("P3F_SHOW").ok().and_then(|v| v.parse().ok()).unwrap_or(5);
             let (mut bad, mut trig) = (0, 0);
             for (i, c) in cases.iter().enumerate() {
                 let got = run_case(c);
@@ -235,7 +236,7 @@ fn real_main() {
                         continue;
                     }
                     bad += 1;
-                    if bad <= 5 {
+                    if bad <= show {
                         eprintln!(
                             "MISMATCH case {i}\n  program {}\n  want {}\n  got  {}",
                             c.program.to_edn_string(),
