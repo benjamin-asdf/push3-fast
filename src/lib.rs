@@ -528,7 +528,8 @@ impl Machine {
     /// `print-form`: strings and chars print as themselves, everything else through `pr-str`.
     fn print_form(t: Ty, it: &Item) -> String {
         match (t, it) {
-            (Ty::Char, Item::Char(c)) => c.to_string(),
+            // `print-form`: a char (or string) item prints as itself, whatever stack it came from
+            (_, Item::Char(c)) => c.to_string(),
             (Ty::Float, Item::Float(v)) => fmt::pr_float_stack(*v),
             _ => fmt::pr_str(it),
         }
