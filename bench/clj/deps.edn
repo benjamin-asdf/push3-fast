@@ -1,0 +1,5 @@
+{:paths ["."]
+ :aliases
+ {;; the reference Clojure interpreter (base) and the perf branch; override :local/root to choose
+  :clj-push3 {:extra-deps {benjamin-schwerdtner/clj-push3 {:local/root "../../../benjamin-schwerdtner-clj-push3"}}}
+  :propeller {:extra-deps {propeller/propeller {:local/root "../../../propeller"}}}}}
