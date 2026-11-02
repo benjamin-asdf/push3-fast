@@ -63,7 +63,13 @@
 (defn- gen-ivec
   "Non-empty on purpose: an empty vector literal lands on a [:push/vector :push/clj-object] stack."
   [^java.util.Random r]
-  (vec (repeatedly (inc (.nextInt r 5)) #(long (- (.nextInt r 21) 10)))))
+  ;; longer vectors now and then, a narrow value range (many repeats, hits for indexof, remove,
+  ;; replace, ...), and sometimes a value near the INTEGER clamp
+  (let [n (if (< (.nextDouble r) 0.2) (inc (.nextInt r 12)) (inc (.nextInt r 5)))
+        width (if (< (.nextDouble r) 0.4) 4 21)]
+    (vec (repeatedly n #(long (cond
+                                (< (.nextDouble r) 0.03) (* (if (.nextBoolean r) 1 -1) (+ 5e9 (.nextInt r 2000000000)))
+                                :else (- (.nextInt r width) (quot width 2))))))))
 
 (defn- gen-literal [^java.util.Random r types]
   (case (nth types (.nextInt r (count types)))

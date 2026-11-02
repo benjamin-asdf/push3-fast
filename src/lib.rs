@@ -647,6 +647,16 @@ impl Machine {
                 }
             }
             Fam::Shove => {
+                // Oracle quirk: shove-item reads the stack with (-> state :stacks push-type); for the
+                // vector stack push-type is a vector, not a function of a map, so it throws: a no-op
+                // that has already popped the vector and the index.
+                if t == Ty::IntVec {
+                    if self.len(t) >= 1 && !self.int.is_empty() {
+                        self.ivec.pop();
+                        self.int.pop();
+                    }
+                    return;
+                }
                 let ok = if t == Ty::Int { self.int.len() >= 2 } else { self.len(t) >= 1 && !self.int.is_empty() };
                 if !ok {
                     return;
