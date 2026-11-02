@@ -90,4 +90,8 @@ place, `yank` taking `(int index)` and treating out-of-range indices as a no-op 
 
 ## Licence
 
-Not yet chosen.
+Same as [Propeller](https://github.com/lspector/propeller): the Eclipse Public License 2.0
+(`LICENSE`), with the Secondary Licenses its `project.clj` names: GPL-2.0-or-later with the
+Classpath exception. This Source Code may also be made available under that Secondary License
+when the conditions for such availability set forth in the Eclipse Public License, v. 2.0 are
+satisfied.
