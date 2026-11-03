@@ -243,14 +243,21 @@ pub struct Prepared<'a> {
 }
 
 impl Prepared<'_> {
+    pub fn case_inputs(&self) -> &[Vec<Item>] {
+        &self.inputs
+    }
+
     /// Runs `program` on every case. With `cap`, stops as soon as the total error exceeds it.
     pub fn evaluate(&self, program: &Item, cap: Option<f64>) -> Row {
         let p = self.problem;
         let mut row = Row { errors: Vec::with_capacity(p.cases.len()), steps: 0, cut: false };
         let mut total = 0.0;
+        let mut m = Machine::new(program.clone(), Vec::new());
         for (c, inputs) in p.cases.iter().zip(&self.inputs) {
-            let mut m = Machine::new(program.clone(), inputs.clone());
-            m.named = p.input_names.iter().cloned().zip(inputs.iter().cloned()).collect();
+            m.reset(program, inputs);
+            for (name, v) in p.input_names.iter().zip(inputs) {
+                m.named.push((name.clone(), v.clone()));
+            }
             m.run(p.max);
             row.steps += m.steps;
             let actual = p.read_output(&m);

@@ -459,6 +459,25 @@ impl Machine {
         }
     }
 
+    /// Back to the state of `Machine::new(program, inputs)`, keeping the allocated stacks.
+    pub fn reset(&mut self, program: &Item, inputs: &[Item]) {
+        self.exec.clear();
+        self.exec.push(program.clone());
+        self.int.clear();
+        self.boolean.clear();
+        self.float.clear();
+        self.chr.clear();
+        self.string.clear();
+        self.ivec.clear();
+        self.print.clear();
+        self.regs = [None; 8];
+        self.inputs.clear();
+        self.inputs.extend_from_slice(inputs);
+        self.named.clear();
+        self.unsupported = false;
+        self.steps = 0;
+    }
+
     /// Runs until the EXEC stack is empty or `max_steps` EXEC pops have happened.
     pub fn run(&mut self, max_steps: u64) {
         while self.steps < max_steps && !self.exec.is_empty() {
@@ -570,6 +589,40 @@ impl Machine {
             Ty::Char => self.chr.remove(idx).map_or(Item::Nil, Item::Char),
             Ty::Str => Item::Str(Rc::new(self.string.remove(idx))),
             Ty::IntVec => Item::IntVec(self.ivec.remove(idx)),
+        }
+    }
+
+    /// `k` more copies of the top item. Copies of values that are already on the stack need no
+    /// clamping or sanitizing, so this is a plain `resize`.
+    fn push_copies_of_top(&mut self, t: Ty, k: usize) {
+        macro_rules! copies {
+            ($v:expr) => {{
+                let top = $v.last().unwrap().clone();
+                let n = $v.len() + k;
+                $v.resize(n, top);
+            }};
+        }
+        match t {
+            Ty::Int => copies!(self.int),
+            Ty::Bool => copies!(self.boolean),
+            Ty::Exec => copies!(self.exec),
+            Ty::Float => copies!(self.float),
+            Ty::Char => copies!(self.chr),
+            Ty::Str => copies!(self.string),
+            Ty::IntVec => copies!(self.ivec),
+        }
+    }
+
+    /// Appends a copy of the items `start..end` (a memcpy for the plain types).
+    fn dup_top_range(&mut self, t: Ty, start: usize, end: usize) {
+        match t {
+            Ty::Int => self.int.extend_from_within(start..end),
+            Ty::Bool => self.boolean.extend_from_within(start..end),
+            Ty::Exec => self.exec.extend_from_within(start..end),
+            Ty::Float => self.float.extend_from_within(start..end),
+            Ty::Char => self.chr.extend_from_within(start..end),
+            Ty::Str => self.string.extend_from_within(start..end),
+            Ty::IntVec => self.ivec.extend_from_within(start..end),
         }
     }
 
@@ -713,11 +766,8 @@ impl Machine {
                     return;
                 }
                 let n = self.int.pop().unwrap();
-                let top = self.get(t, self.len(t) - 1);
                 if n > 0 {
-                    for _ in 0..(n.min(MAX_STACK_ITEMS) - 1) {
-                        self.push_item(t, top.clone());
-                    }
+                    self.push_copies_of_top(t, (n.min(MAX_STACK_ITEMS) - 1) as usize);
                 } else {
                     self.pop_item(t);
                 }
@@ -732,11 +782,7 @@ impl Machine {
                 if n <= 0 {
                     return;
                 }
-                let start = len - n as usize;
-                let items: Vec<Item> = (start..len).map(|i| self.get(t, i)).collect();
-                for it in items {
-                    self.push_item(t, it);
-                }
+                self.dup_top_range(t, len - n as usize, len);
             }
             Fam::DeepDup => {
                 if !self.takes_index(t) {

@@ -115,7 +115,7 @@ A problem file is `{:output :push/string :error :levenshtein :max 2000 :cases [{
 with `:program`. `--cap X` stops a program once its total error exceeds X (the line then ends in
 `:cut true` and the vector is partial). Parity: 500 random programs on each of the 31 problems,
 every error vector identical to the oracle's (programs using sin/cos/tan are counted apart).
-Throughput on 20 threads: 1,000 to 60,000 programs/s on 40 cases, depending on the problem.
+Throughput on small-or-large, 40 cases: 3,400 programs/s on one thread (99 M steps/s), 40,000 programs/s on 20 threads. `evalprof`, `opprof` and `slowstep` show where the time goes (a program that duplicates a stack of a million items costs more than ten thousand ordinary ones).
 `push3-fast evaldiff <problem> <programs>` is the comparison.
 
 ## Prior work

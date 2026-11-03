@@ -3,6 +3,9 @@
 //! push3-fast eval <problem.edn> [--threads N] [--cap X]
 //!                                        programs on stdin (one per line), one error vector per program
 //! push3-fast evaldiff <problem.edn> <programs.edn>   compare error vectors with the recorded oracle ones
+//! push3-fast evalprof <problem.edn> <programs.edn>   one thread: time per program, how much the slowest 10% cost
+//! push3-fast opprof  <problem.edn> <programs.edn>   time per instruction name over all programs and cases
+//! push3-fast slowstep <problem.edn> <programs.edn> <line>   per-op time of one program (0-based line)
 //! push3-fast diff  <cases.edn>           compare final states with the recorded oracle states
 //! push3-fast bench <cases.edn> [reps]    EXEC steps per second
 //!
@@ -236,6 +239,96 @@ fn real_main() {
         Some("names") => {
             for n in push3_fast::all_names() {
                 println!("{n}");
+            }
+        }
+        // evalprof <problem.edn> <programs.edn>: single thread, time per program, where it goes
+        Some("evalprof") => {
+            let (problem, _, _) = eval_args(&args);
+            let lines: Vec<String> = std::fs::read_to_string(args.get(3).expect("programs.edn")).unwrap().lines().map(String::from).collect();
+            let prepared = problem.prepare();
+            let mut rows: Vec<(f64, u64, usize)> = Vec::new();
+            let t0 = Instant::now();
+            let parsed: Vec<_> = lines.iter().map(|l| push3_fast::eval::parse_program_line(l).unwrap().0).collect();
+            let parse_s = t0.elapsed().as_secs_f64();
+            for (i, p) in parsed.iter().enumerate() {
+                let t = Instant::now();
+                let r = prepared.evaluate(p, None);
+                rows.push((t.elapsed().as_secs_f64(), r.steps, i));
+            }
+            let total: f64 = rows.iter().map(|r| r.0).sum();
+            let steps: u64 = rows.iter().map(|r| r.1).sum();
+            rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+            let top10: f64 = rows.iter().take(rows.len() / 10).map(|r| r.0).sum();
+            let maxed = rows.iter().filter(|r| r.1 as usize >= problem.n_cases() * 2000 * 9 / 10).count();
+            println!("parse {parse_s:.3}s run {total:.3}s {:.1}M steps/s; slowest 10% of programs = {:.0}% of time; {maxed} programs near the step limit on every case; mean steps/program {}", steps as f64 / total / 1e6, top10 / total * 100.0, steps / rows.len() as u64);
+            for r in rows.iter().take(3) {
+                println!("  {:.1} ms, {} steps: {}", r.0 * 1e3, r.1, &lines[r.2][..lines[r.2].len().min(160)]);
+            }
+        }
+        // slowstep <problem.edn> <programs.edn> <line>: per-op time on the first case of one program
+        Some("slowstep") => {
+            let (problem, _, _) = eval_args(&args);
+            let lines: Vec<String> = std::fs::read_to_string(args.get(3).unwrap()).unwrap().lines().map(String::from).collect();
+            let idx: usize = args.get(4).unwrap().parse().unwrap();
+            let (p, _) = push3_fast::eval::parse_program_line(&lines[idx]).unwrap();
+            let mut acc: std::collections::HashMap<String, (f64, u64)> = Default::default();
+            for inputs in problem.prepare().case_inputs() {
+                let mut m = Machine::new(p.clone(), inputs.clone());
+                let mut maxexec = 0;
+                while m.steps < 2000 && !m.exec.is_empty() {
+                    let top = m.exec.last().unwrap().to_edn_string();
+                    let name: String = top.chars().take(30).collect();
+                    let t = Instant::now();
+                    m.step();
+                    let e = acc.entry(if top.starts_with('(') { "(list)".into() } else { name }).or_default();
+                    e.0 += t.elapsed().as_secs_f64();
+                    e.1 += 1;
+                    maxexec = maxexec.max(m.exec.len());
+                }
+                if maxexec > 1000 { println!("case: steps {} exec {} max exec {} int {}", m.steps, m.exec.len(), maxexec, m.int.len()); }
+            }
+            let mut v: Vec<_> = acc.into_iter().collect();
+            v.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap());
+            for (k, (t, n)) in v.iter().take(8) {
+                println!("{k:32} {:8.3} ms {n:6} calls {:8.0} ns/call", t * 1e3, t * 1e9 / *n as f64);
+            }
+        }
+        // opprof <problem.edn> <programs.edn>: time per instruction over every program and case
+        Some("opprof") => {
+            let (problem, _, _) = eval_args(&args);
+            let lines: Vec<String> = std::fs::read_to_string(args.get(3).unwrap()).unwrap().lines().map(String::from).collect();
+            let prepared = problem.prepare();
+            let overhead = {
+                let t = Instant::now();
+                for _ in 0..1_000_000 { std::hint::black_box(Instant::now().elapsed()); }
+                t.elapsed().as_secs_f64() * 1e9 / 1e6
+            };
+            let mut acc: std::collections::HashMap<String, (f64, u64)> = Default::default();
+            for l in &lines {
+                let (p, _) = push3_fast::eval::parse_program_line(l).unwrap();
+                for inputs in prepared.case_inputs() {
+                    let mut m = Machine::new(p.clone(), inputs.clone());
+                    while m.steps < 2000 && !m.exec.is_empty() {
+                        let key = match m.exec.last().unwrap() {
+                            Item::Op(op) => op.name(),
+                            Item::List(_) => "(list)".to_string(),
+                            _ => "(literal)".to_string(),
+                        };
+                        let t = Instant::now();
+                        m.step();
+                        let e = acc.entry(key).or_default();
+                        e.0 += t.elapsed().as_secs_f64() * 1e9;
+                        e.1 += 1;
+                    }
+                }
+            }
+            let total: f64 = acc.values().map(|v| v.0).sum();
+            let calls: u64 = acc.values().map(|v| v.1).sum();
+            println!("timer overhead ~{overhead:.0} ns/step; {calls} steps, {:.1} ns/step measured", total / calls as f64);
+            let mut v: Vec<_> = acc.into_iter().collect();
+            v.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap());
+            for (k, (t, n)) in v.iter().take(18) {
+                println!("{k:34} {:5.1}% of time {n:9} calls {:8.0} ns/call", t / total * 100.0, t / *n as f64);
             }
         }
         Some("eval") => {
