@@ -138,10 +138,10 @@ gives (checked on six problems with several option combinations).
 Measured on gcd, 500 random programs, one thread: 0.25 s without options, 0.04 s with
 `--screen 5:500000` (482 of the 500 programs are cut after five cases).
 
-Scaling (fizz-buzz, 40 cases, 20,000 programs; Intel Core i5-14600: 6 performance cores with two
-threads each plus 8 efficiency cores, 20 hardware threads): 3,000 programs/s on one thread, 17,000 on
-6 threads (5.8x), 37,000 on 20 threads (12.5x). `evalprof`, `opprof` and `slowstep` show where
-the time goes.
+Scaling (fizz-buzz, 40 cases, 20,000 programs, best of 7; AMD Ryzen 9 8945H: 8 cores, 16 threads, a
+laptop, so clocks scale with load and temperature; 14 GB RAM, Linux 7.2.11, rustc 1.99.1): 2,850
+programs/s on one thread, 21,600 on 8 threads (7.6x), 25,900 on 16 threads (9.1x). Past the 8 cores,
+the extra threads add little. `evalprof`, `opprof` and `slowstep` show where the time goes.
 
 ### Server mode
 
