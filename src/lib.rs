@@ -6,6 +6,7 @@
 //! states against it.
 
 pub mod edn;
+pub mod eval;
 pub mod fmt;
 pub mod strings;
 pub mod vectors;

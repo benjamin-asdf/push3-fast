@@ -98,6 +98,26 @@ temperature), 14 GB RAM, Linux 7.2.11 (Arch), OpenJDK 27, rustc 1.99.1, GCC 16.2
 
 The ratios, not the absolute numbers, are the result: a different machine moves all rows together.
 
+## Batch evaluation (error vectors)
+
+For search loops: `eval` takes a problem file and many programs and returns one error vector per
+program, on all cases, on all cores. The output readers and error functions (numeric, Levenshtein,
+exact, bitwise, printed number, integer pair) are those of clj-push3's `run/errors`.
+
+```
+$ scripts/evaldiff-all.sh 500 40 1                 # writes cases/ev/<problem>.problem.edn and .programs.edn
+$ push3-fast eval cases/ev/fizz-buzz.problem.edn --threads 8 --cap 5000 < programs.txt
+{:errors [3.0 1.0 ...] :total 91.0 :solved 4 :steps 61234}
+```
+
+A problem file is `{:output :push/string :error :levenshtein :max 2000 :cases [{:inputs [...] :output ...}]}`
+(plus `:num-outputs` and `:input-names` for the circuits). A program line is the program or a map
+with `:program`. `--cap X` stops a program once its total error exceeds X (the line then ends in
+`:cut true` and the vector is partial). Parity: 500 random programs on each of the 31 problems,
+every error vector identical to the oracle's (programs using sin/cos/tan are counted apart).
+Throughput on 20 threads: 1,000 to 60,000 programs/s on 40 cases, depending on the problem.
+`push3-fast evaldiff <problem> <programs>` is the comparison.
+
 ## Prior work
 
 Push is Lee Spector's language; the specification is the
@@ -150,7 +170,7 @@ test fails, and the change is followed here. What this has turned up in the corn
 ## Roadmap
 
 1. Done: all 31 Propeller problems, 265 instruction names, parity with the oracle.
-2. Early exit on the first failed case, case downsampling, parallel evaluation.
+2. Done: batch evaluation with early exit by error cap and parallel threads. Open: case downsampling.
 3. Python bindings.
 4. The CODE and NAME stacks, and vectors of floats, strings, booleans and chars, for instruction
    sets beyond the Propeller benchmarks.

@@ -1,5 +1,8 @@
 //! push3-fast names                       the implemented instruction names, one per line
 //! push3-fast run                         EDN cases on stdin, EDN results on stdout (one per line)
+//! push3-fast eval <problem.edn> [--threads N] [--cap X]
+//!                                        programs on stdin (one per line), one error vector per program
+//! push3-fast evaldiff <problem.edn> <programs.edn>   compare error vectors with the recorded oracle ones
 //! push3-fast diff  <cases.edn>           compare final states with the recorded oracle states
 //! push3-fast bench <cases.edn> [reps]    EXEC steps per second
 //!
@@ -170,6 +173,17 @@ fn load(path: &str) -> Vec<Case> {
     cases
 }
 
+fn eval_args(args: &[String]) -> (push3_fast::eval::Problem, usize, Option<f64>) {
+    let text = std::fs::read_to_string(args.get(2).expect("problem.edn")).expect("problem.edn");
+    let problem = push3_fast::eval::Problem::parse(&text).unwrap_or_else(|e| panic!("problem.edn: {e}"));
+    let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let threads = flag("--threads")
+        .map(|v| v.parse().expect("--threads N"))
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
+    let cap = flag("--cap").map(|v| v.parse().expect("--cap X"));
+    (problem, threads, cap)
+}
+
 fn main() {
     // exec_y and exec_s build deeply nested items; recursion in parse, drop and print needs room
     std::thread::Builder::new().stack_size(1 << 30).spawn(real_main).unwrap().join().unwrap();
@@ -222,6 +236,54 @@ fn real_main() {
         Some("names") => {
             for n in push3_fast::all_names() {
                 println!("{n}");
+            }
+        }
+        Some("eval") => {
+            let (problem, threads, cap) = eval_args(&args);
+            let lines: Vec<String> = std::io::stdin().lock().lines().map(|l| l.expect("stdin")).filter(|l| !l.trim().is_empty()).collect();
+            let stdout = std::io::stdout();
+            let mut out = std::io::BufWriter::new(stdout.lock());
+            for r in push3_fast::eval::evaluate_lines(&problem, &lines, threads, cap) {
+                match r {
+                    Ok(row) => writeln!(out, "{}", row.to_edn()).unwrap(),
+                    Err(e) => writeln!(out, "{{:error {e:?}}}").unwrap(),
+                }
+            }
+        }
+        Some("evaldiff") => {
+            let (problem, threads, _) = eval_args(&args);
+            let lines: Vec<String> = std::fs::read_to_string(args.get(3).expect("programs.edn"))
+                .expect("programs.edn")
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(String::from)
+                .collect();
+            let t = Instant::now();
+            let rows = push3_fast::eval::evaluate_lines(&problem, &lines, threads, None);
+            let dt = t.elapsed().as_secs_f64();
+            let (mut bad, mut trig, mut steps) = (0, 0, 0u64);
+            for (i, (line, r)) in lines.iter().zip(&rows).enumerate() {
+                let want = push3_fast::eval::parse_program_line(line).ok().and_then(|(_, w)| w);
+                let (Ok(row), Some(want)) = (r, want) else { bad += 1; continue };
+                steps += row.steps;
+                let same = row.errors.len() == want.len() && row.errors.iter().zip(&want).all(|(a, b)| a == b || (a.is_nan() && b.is_nan()));
+                if !same {
+                    if [":float_sin", ":float_cos", ":float_tan"].iter().any(|t| line.contains(t)) {
+                        trig += 1;
+                        continue;
+                    }
+                    bad += 1;
+                    if bad <= 5 {
+                        eprintln!("MISMATCH program {i}\n  {line}\n  got {:?}", row.errors);
+                    }
+                }
+            }
+            println!(
+                "{} programs x {} cases, {} mismatches, {} in sin/cos/tan programs (tolerated); {:.3} s on {} threads, {:.0} programs/s, {:.1} M steps/s",
+                lines.len(), problem.n_cases(), bad, trig, dt, threads, lines.len() as f64 / dt, steps as f64 / dt / 1e6
+            );
+            if bad > 0 {
+                std::process::exit(1);
             }
         }
         Some("run") => {
