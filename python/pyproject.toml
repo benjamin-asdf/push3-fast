@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "push3_fast"
+version = "0.1.0"
+description = "Python bindings for push3-fast, a fast Push3 interpreter"
+requires-python = ">=3.10"
+license = { text = "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0" }
+dependencies = []
+
+[project.optional-dependencies]
+numpy = ["numpy"]
+test = ["pytest", "numpy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

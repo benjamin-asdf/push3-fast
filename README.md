@@ -212,6 +212,58 @@ problems keep none with Propeller's settings. mul4: its genome size of 10 cannot
 the input vectors (clj-push3 notes this; the set that can needs `vector_float`, which is not modelled
 here), so the outputs are constant.
 
+## Python
+
+`python/` holds bindings (PyO3 and maturin, in a crate of its own, so the interpreter itself keeps no
+dependencies), for scoring programs and generating training data in-process. The wheel works on
+Python 3.10 and later. NumPy is optional.
+
+```
+$ pip install ./python                                     # needs a Rust toolchain
+```
+
+```python
+import push3_fast
+
+problem = push3_fast.Problem.from_file("cases/ev/gcd.problem.edn")   # or Problem(edn_text)
+programs = ["(:in1 :in2 :integer_+)", "(:in1 :in2 :integer_%)", "(not closed"]
+
+rows = problem.evaluate(programs, cap=5000.0, screen=(5, 500000.0), stack_limit=100000, threads=8)
+rows[0]   # {'errors': [...], 'total': ..., 'solved': ..., 'steps': ..., 'cut': ..., 'overflow': ...}
+rows[2]   # {'error': "unsupported token 'not'"}; the rest of the batch is unaffected
+
+a = problem.evaluate_arrays(programs, stack_limit=100000)            # no Python object per program
+a["errors"]    # float64, shape (programs, problem.n_errors), padded with NaN (or fill=...)
+a["lengths"], a["total"], a["solved"], a["steps"], a["cut"], a["overflow"], a["ok"], a["messages"]
+
+records, stats = push3_fast.hindsight(open("cases/hs/gcd.spec.edn").read(), n=1000, seed=1)
+records[0]     # {'edn': <the CLI's line>, 'program': '(...)', 'plushy': [...], 'examples': [{'inputs': [...], 'output': ...}, ...]}
+stats          # {'kept': ..., 'too_few_outputs': ..., 'too_uniform': ..., 'limit_hit': ...}
+
+push3_fast.plushy_to_program("[:exec_if 1 :close 2 3]")              # '(:exec_if (1) (2 3))'
+push3_fast.names()
+```
+
+The arguments mean what the flags of `eval` and `hindsight` mean, with the same defaults; `genome="tree"`
+and `length=(lo, hi)` select random trees. `push3_fast.pyi` has the whole interface.
+
+A program that cannot be read is that program's `error`. A bad problem or spec raises `ValueError`, an
+unreadable file `OSError` (`FileNotFoundError`, ...). The GIL is released during evaluation and
+generation, so other Python threads keep running, and Ctrl-C takes effect when the call returns.
+A panic in the library is caught, but two things cannot be: a stack overflow and running out of memory
+end the process. For the first, a program nested more than 100,000 levels is refused (1,000 for a problem
+or spec, 100,000 genes for a genome). For the second, the stack limit is off by default, as in `eval`, and
+one program can then hold gigabytes on each thread: pass `stack_limit` in a search loop.
+
+Tested (`pytest` in `python/`; the tests that need the git-ignored `cases/` skip without it): on nine
+problems covering all output readers and error functions, 500 programs each, every row equals `eval`'s,
+with no options and with cap, screen, stack limit and Propeller limits together, and every error vector
+equals the oracle's. On seven problems `hindsight` gives the same records and counts as the CLI for the
+same seed on 1, 2 and 4 threads, for both genomes and the other options. Other Python threads keep
+running during `evaluate`, `evaluate_arrays` and `hindsight` (with a call that holds the GIL as the
+control). Malformed programs, bad problems and specs, missing files, panics in the reader and very deep
+nesting behave as above.
+
 ## Prior work
 
 Push is Lee Spector's language; the specification is the
@@ -265,7 +317,7 @@ test fails, and the change is followed here. What this has turned up in the corn
 
 1. Done: all 31 Propeller problems, 265 instruction names, parity with the oracle.
 2. Done: batch evaluation with early exit by error cap and parallel threads. Open: case downsampling.
-3. Python bindings.
+3. Done: Python bindings (see [Python](#python)).
 4. The CODE and NAME stacks, and vectors of floats, strings, booleans and chars, for instruction
    sets beyond the Propeller benchmarks.
 

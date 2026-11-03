@@ -62,12 +62,18 @@ impl<'a> Parser<'a> {
         self.pos += 1;
         let mut out = String::new();
         loop {
-            let rest = std::str::from_utf8(&self.b[self.pos..]).map_err(|e| e.to_string())?;
-            let c = rest.chars().next().ok_or("unterminated string")?;
-            self.pos += c.len_utf8();
+            // up to the next quote or backslash in one go: those bytes never occur inside a multi-byte
+            // character, and a record can hold a string of megabytes
+            let start = self.pos;
+            while self.pos < self.b.len() && !matches!(self.b[self.pos], b'"' | b'\\') {
+                self.pos += 1;
+            }
+            out.push_str(std::str::from_utf8(&self.b[start..self.pos]).map_err(|e| e.to_string())?);
+            let c = *self.b.get(self.pos).ok_or("unterminated string")?;
+            self.pos += 1;
             match c {
-                '"' => return Ok(Edn::Str(out)),
-                '\\' => {
+                b'"' => return Ok(Edn::Str(out)),
+                _ => {
                     let e = *self.b.get(self.pos).ok_or("unterminated escape")?;
                     self.pos += 1;
                     match e {
@@ -86,7 +92,6 @@ impl<'a> Parser<'a> {
                         other => return Err(format!("unsupported escape \\{}", other as char)),
                     }
                 }
-                c => out.push(c),
             }
         }
     }
@@ -254,5 +259,29 @@ impl Item {
 
     pub fn to_edn_string(&self) -> String {
         crate::fmt::pr_str(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strings_read_as_before() {
+        let read = |s: &str| parse(s);
+        assert_eq!(read(r#""""#), Ok(Edn::Str(String::new())));
+        assert_eq!(read(r#""plain é ✓ 𝄞""#), Ok(Edn::Str("plain é ✓ 𝄞".into())));
+        assert_eq!(read(r#""a\n\t\r\b\f\"\\é\u00e9z""#), Ok(Edn::Str("a\n\t\r\u{8}\u{c}\"\\ééz".into())));
+        assert_eq!(read(r#""never closed"#), Err("unterminated string".into()));
+        assert_eq!(read(r#""ends in \"#), Err("unterminated escape".into()));
+        assert!(read(r#""\é""#).is_err());
+        assert!(read(r#""\q""#).is_err());
+    }
+
+    #[test]
+    fn a_long_string_reads_in_linear_time() {
+        // about 10^14 byte visits when each character validates the rest of the text
+        let text = format!("[\"{}\"]", "a".repeat(10_000_000));
+        assert_eq!(parse(&text).unwrap().items().unwrap().len(), 1);
     }
 }

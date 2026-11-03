@@ -207,6 +207,17 @@ impl Problem {
         self.cases.len()
     }
 
+    /// Length of an error vector that was not cut: one per case, one per bit on a bitwise problem.
+    pub fn n_errors(&self) -> usize {
+        self.cases
+            .iter()
+            .map(|c| match (self.error, &c.expected) {
+                (ErrKind::Bitwise, Value::Bits(bits)) => bits.len(),
+                _ => 1,
+            })
+            .sum()
+    }
+
     fn read_output(&self, m: &Machine) -> Value {
         match self.output {
             Output::Int => m.int.last().map_or(Value::Missing, |v| Value::Int(*v)),

@@ -1,0 +1,29 @@
+[package]
+name = "push3-fast-python"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for push3-fast"
+license = "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
+publish = false
+
+# Its own workspace: this is what keeps the root crate free of dependencies, and it means the
+# [profile.release] below applies here (the root crate's does not, it only applies when the root is
+# what is being built).
+[workspace]
+
+[lib]
+name = "push3_fast"
+crate-type = ["cdylib"]
+
+[dependencies]
+# renamed: this crate's own library is also called push3_fast, so that Python can import it
+core3 = { package = "push3-fast", path = ".." }
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310"] }
+
+# Same as the root crate except for panic: "abort" would let one panic end the Python process, and
+# catch_unwind only works with "unwind".
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "unwind"
