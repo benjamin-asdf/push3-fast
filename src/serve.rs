@@ -5,7 +5,7 @@
 //! {:op :problem :name "gcd" :path "gcd.problem.edn"}      -> {:ok true :cases 40}
 //! {:op :problem :name "gcd" :problem {:output ... :cases [...]}}   (inline instead of :path)
 //! {:op :eval :problem "gcd" :programs [(...) (...)]
-//!  :cap 5000 :screen [5 500000] :stack-limit 100000 :threads 8}
+//!  :cap 5000 :screen [5 500000] :stack-limit 100000 :propeller-limits true :threads 8}
 //!                                                         -> {:results [{:errors [...] :total ...} ...]}
 //! {:op :quit}
 //! ```
@@ -42,7 +42,8 @@ fn limits(req: &Edn) -> Result<Limits, String> {
         Some(Edn::Int(n)) => *n as usize,
         _ => 0,
     };
-    Ok(Limits { cap, screen, stack_limit })
+    let propeller_limits = matches!(req.get("propeller-limits"), Some(Edn::Bool(true)));
+    Ok(Limits { cap, screen, stack_limit, propeller_limits })
 }
 
 fn handle(req: &Edn, problems: &mut HashMap<String, Problem>, default_threads: usize) -> Result<Option<String>, String> {

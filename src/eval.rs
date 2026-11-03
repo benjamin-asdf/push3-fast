@@ -75,7 +75,12 @@ pub struct Limits {
     pub screen: Option<(usize, f64)>,
     /// 0: none (the oracle's semantics). See the README, `--stack-limit`.
     pub stack_limit: usize,
+    /// Propeller's limits on values (strings and vectors truncated to 1000). Off: the oracle's semantics.
+    pub propeller_limits: bool,
 }
+
+/// Propeller's `max-string-length` and `max-vector-length` (push/limits.cljc).
+pub const PROPELLER_MAX_LENGTH: usize = 1000;
 
 /// What evaluating one program gave.
 pub struct Row {
@@ -290,13 +295,15 @@ impl Value {
 }
 
 impl Prepared<'_> {
-    /// Runs `program` on case `case` and returns the output as EDN text, or `None` if the program
-    /// left no output (or was aborted by `stack_limit`, 0 = none).
-    pub fn output_of(&mut self, program: &Item, case: usize, stack_limit: usize) -> Option<String> {
+    /// Runs `program` on case `case` under `limits` and returns the output as EDN text, or `None` if
+    /// the program left no output (or was aborted), and whether a value limit was hit on the way.
+    pub fn output_of(&mut self, program: &Item, case: usize, limits: Limits) -> (Option<String>, bool) {
         let p = self.problem;
         let m = &mut self.machine;
         m.reset(program, &self.inputs[case]);
-        m.stack_limit = if stack_limit == 0 { usize::MAX } else { stack_limit };
+        m.stack_limit = if limits.stack_limit == 0 { usize::MAX } else { limits.stack_limit };
+        m.max_string = if limits.propeller_limits { PROPELLER_MAX_LENGTH } else { usize::MAX };
+        m.max_vector = m.max_string;
         for (name, v) in p.input_names.iter().zip(&self.inputs[case]) {
             m.named.push((name.clone(), v.clone()));
         }
@@ -304,10 +311,11 @@ impl Prepared<'_> {
         let v = if m.overflowed { Value::Missing } else { p.read_output(m) };
         m.trim();
         // a circuit's answer counts only when every output register was written
+        let hit = m.limit_hit;
         if matches!(&v, Value::Bits(b) if b.iter().any(|x| x.is_none())) {
-            return None;
+            return (None, hit);
         }
-        v.to_edn()
+        (v.to_edn(), hit)
     }
 
     /// The pool entry `case` as EDN text.
@@ -329,6 +337,8 @@ impl Prepared<'_> {
         for (k, (c, inputs)) in p.cases.iter().zip(&self.inputs).enumerate() {
             m.reset(program, inputs);
             m.stack_limit = if limits.stack_limit == 0 { usize::MAX } else { limits.stack_limit };
+            m.max_string = if limits.propeller_limits { PROPELLER_MAX_LENGTH } else { usize::MAX };
+            m.max_vector = m.max_string;
             for (name, v) in p.input_names.iter().zip(inputs) {
                 m.named.push((name.clone(), v.clone()));
             }
@@ -519,6 +529,64 @@ mod tests {
         let passed = run("(:in1)", Limits { screen: Some((1, 1.0)), ..Limits::default() });
         assert!(!passed.cut);
         assert_eq!(passed.errors.len(), 4);
+    }
+
+    const STRING_PROBLEM: &str = r#"{:output :push/string :error :levenshtein :max 200
+        :cases [{:inputs [""] :output ""}]}"#;
+
+    fn string_output(program: &str, propeller_limits: bool) -> (Option<String>, bool, u64) {
+        let p = Problem::parse(STRING_PROBLEM).unwrap();
+        let (prog, _) = parse_program_line(program).unwrap();
+        let mut prepared = p.prepare();
+        let limits = Limits { propeller_limits, ..Limits::default() };
+        let (out, hit) = prepared.output_of(&prog, 0, limits);
+        (out, hit, prepared.machine.allocated as u64)
+    }
+
+    /// `(s :string_dup :string_concat)` n times: the length doubles each time.
+    fn doubling(seed: &str, n: usize) -> String {
+        format!("({seed:?} {})", ":string_dup :string_concat ".repeat(n))
+    }
+
+    #[test]
+    fn propeller_limits_truncate_strings_to_1000_chars() {
+        let (out, hit, _) = string_output(&doubling("é", 11), true);
+        let out = out.unwrap();
+        assert!(hit);
+        // "é" is two bytes: the limit counts chars, and the cut lands on a char boundary
+        assert_eq!(out.trim_matches('"').chars().count(), 1000);
+        let (short, hit, _) = string_output(&doubling("a", 3), true);
+        assert!(!hit);
+        assert_eq!(short.unwrap().trim_matches('"').len(), 8);
+    }
+
+    #[test]
+    fn without_limits_a_long_string_stays() {
+        let (out, hit, _) = string_output(&doubling("a", 11), false);
+        assert!(!hit);
+        assert_eq!(out.unwrap().trim_matches('"').len(), 2048);
+    }
+
+    #[test]
+    fn a_replace_that_would_explode_is_not_allocated() {
+        // a 2^20 byte string of "a", every "a" replaced by a 2^20 byte string: a terabyte
+        let big = doubling("a", 20);
+        let program = format!("({big} :string_dup :string_dup \"a\" :string_swap :string_replace)");
+        let (_, _, allocated) = string_output(&program, false);
+        assert!(allocated < 1 << 28);
+    }
+
+    #[test]
+    fn the_allocation_budget_ends_a_run_that_keeps_making_big_strings() {
+        // 8 MB strings made over and over, in a loop that would otherwise run to the step limit
+        let big = doubling("a", 23);
+        let program = format!("({big} :exec_y (:string_dup :string_dup :string_concat :string_pop))");
+        let p = Problem::parse(&STRING_PROBLEM.replace(":max 200", ":max 100000")).unwrap();
+        let (prog, _) = parse_program_line(&program).unwrap();
+        let mut prepared = p.prepare();
+        let (out, _) = prepared.output_of(&prog, 0, Limits::default());
+        assert!(out.is_none());
+        assert!(prepared.machine.overflowed);
     }
 
     #[test]

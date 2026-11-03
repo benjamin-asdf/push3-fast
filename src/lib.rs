@@ -374,9 +374,29 @@ pub struct Machine {
     /// Opt-in resource limit (not in the oracle): a run is aborted when a stack grows past this
     /// many items through dup_items / dup_times. `usize::MAX` keeps the oracle's semantics.
     pub stack_limit: usize,
-    /// Set when the run was aborted by `stack_limit`.
+    /// Set when the run was aborted by `stack_limit` or the allocation budget.
     pub overflowed: bool,
+    /// Propeller's `max-string-length` and `max-vector-length`: longer values are truncated when
+    /// pushed. `usize::MAX` (the default) keeps the oracle's semantics.
+    pub max_string: usize,
+    pub max_vector: usize,
+    /// Set when a value was truncated or a print was skipped because of those limits.
+    pub limit_hit: bool,
+    /// Bytes of strings, vectors and print output created so far in this run (see `charge`).
+    pub allocated: usize,
 }
+
+/// Bytes of strings, vectors and print output one run may create; past it the run is aborted like a
+/// stack overflow. No program that does useful work comes near it. It exists so that one program
+/// cannot take the whole process (and machine) down: `string_replace` can multiply a length per step.
+const ALLOC_BUDGET: usize = 1 << 28;
+/// Items on all stacks together, checked every `STACK_CHECK_EVERY` steps, whatever `stack_limit` says.
+const HARD_STACK_LIMIT: usize = 1 << 27;
+const STACK_CHECK_EVERY: u64 = 64;
+/// Nodes of an EXEC item that may be printed. exec_s and exec_y share subtrees, so a small item can
+/// print exponentially large.
+const PRINT_NODES_LIMITED: usize = 100_000;
+const PRINT_NODES_HARD: usize = 1 << 22;
 
 const MAX_STACK_ITEMS: i64 = 1000;
 
@@ -465,6 +485,10 @@ impl Machine {
             steps: 0,
             stack_limit: usize::MAX,
             overflowed: false,
+            max_string: usize::MAX,
+            max_vector: usize::MAX,
+            limit_hit: false,
+            allocated: 0,
         }
     }
 
@@ -486,6 +510,8 @@ impl Machine {
         self.unsupported = false;
         self.steps = 0;
         self.overflowed = false;
+        self.limit_hit = false;
+        self.allocated = 0;
     }
 
     /// Gives back the memory of stacks that grew past 4M items; smaller ones are kept for reuse.
@@ -511,7 +537,45 @@ impl Machine {
     pub fn run(&mut self, max_steps: u64) {
         while self.steps < max_steps && !self.exec.is_empty() {
             self.step();
+            if self.steps % STACK_CHECK_EVERY == 0 && self.total_items() > self.stack_limit.min(HARD_STACK_LIMIT) {
+                self.abort_run();
+            }
         }
+    }
+
+    fn total_items(&self) -> usize {
+        self.exec.len() + self.int.len() + self.boolean.len() + self.float.len() + self.chr.len() + self.string.len() + self.ivec.len()
+    }
+
+    fn abort_run(&mut self) {
+        self.overflowed = true;
+        self.exec.clear();
+    }
+
+    /// Counts `bytes` against the allocation budget; `false` (and an aborted run) past it.
+    pub(crate) fn charge(&mut self, bytes: usize) -> bool {
+        self.allocated = self.allocated.saturating_add(bytes);
+        if self.allocated > ALLOC_BUDGET {
+            self.abort_run();
+            return false;
+        }
+        true
+    }
+
+    /// Nodes in `item`, counting stops at `limit`. Iterative: the tree can be deep.
+    fn nodes_up_to(item: &Item, limit: usize) -> usize {
+        let mut todo = vec![item];
+        let mut n = 0;
+        while let Some(it) = todo.pop() {
+            n += 1;
+            if n >= limit {
+                return n;
+            }
+            if let Item::List(l) = it {
+                todo.extend(l.iter());
+            }
+        }
+        n
     }
 
     #[inline]
@@ -740,8 +804,18 @@ impl Machine {
             Fam::Print => {
                 if self.len(t) >= 1 {
                     let it = self.pop_item(t);
+                    let limit = if self.max_string == usize::MAX { PRINT_NODES_HARD } else { PRINT_NODES_LIMITED };
+                    if Self::nodes_up_to(&it, limit) >= limit {
+                        if self.max_string == usize::MAX {
+                            self.unsupported = true;
+                        }
+                        self.limit_hit = true;
+                        return;
+                    }
                     let s = Self::print_form(t, &it);
-                    self.print.push_str(&s);
+                    if self.charge(s.len()) {
+                        self.print.push_str(&s);
+                    }
                 }
             }
             Fam::Shove => {

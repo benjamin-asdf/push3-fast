@@ -159,10 +159,17 @@ impl Machine {
         self.string.len() >= strings && self.int.len() >= ints && self.chr.len() >= chars
     }
 
-    fn push_string(&mut self, s: String) {
+    fn push_string(&mut self, mut s: String) {
+        if s.len() > self.max_string {
+            // lengths are in chars; bytes >= chars, so a shorter byte length needs no look
+            if let Some((end, _)) = s.char_indices().nth(self.max_string) {
+                s.truncate(end);
+                self.limit_hit = true;
+            }
+        }
         if s.len() > MAX_STR_BYTES {
             self.unsupported = true;
-        } else {
+        } else if self.charge(s.len()) {
             self.string.push(Rc::from(s));
         }
     }
@@ -334,7 +341,11 @@ impl Machine {
                 let m = ps!();
                 let r = ps!();
                 // Rust and Java agree on the empty match: the replacement goes between all chars
-                if m.is_empty() && s.len().saturating_add(r.len().saturating_mul(char_count(&s) + 1)) > MAX_STR_BYTES {
+                // sized before allocating: matches x a long replacement can be gigabytes in one step
+                let matches = if m.is_empty() { char_count(&s) + 1 } else { s.matches(&*m).count() };
+                // the exact result length, so this rejects what `push_string` would reject anyway
+                let size = (s.len() - matches * m.len()).saturating_add(r.len().saturating_mul(matches));
+                if size > MAX_STR_BYTES {
                     self.unsupported = true;
                     return;
                 }

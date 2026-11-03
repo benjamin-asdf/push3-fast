@@ -79,8 +79,14 @@ fn owned(v: Rc<Vec<i64>>) -> Vec<i64> {
 }
 
 impl Machine {
-    fn push_vec(&mut self, v: Vec<i64>) {
-        self.ivec.push(Rc::new(v));
+    fn push_vec(&mut self, mut v: Vec<i64>) {
+        if v.len() > self.max_vector {
+            v.truncate(self.max_vector);
+            self.limit_hit = true;
+        }
+        if self.charge(v.len() * 8) {
+            self.ivec.push(Rc::new(v));
+        }
     }
 
     #[inline(never)]

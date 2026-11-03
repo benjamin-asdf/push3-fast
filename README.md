@@ -123,7 +123,14 @@ Options, all off by default so that the results are exactly the oracle's:
 | `--threads N` | worker threads (default: all hardware threads) |
 | `--cap X` | stop a program once its total error exceeds X; the line ends in `:cut true` and the vector is a prefix |
 | `--screen K:X` | after the first K cases, stop if the total error is above X: a cheap test that drops clearly bad programs before they pay for every case (order the cases so the first ones are informative) |
-| `--stack-limit N` | a case in which dup_items or dup_times grows a stack past N items is aborted and scored as no output; the line carries `:overflow true`. Not in the oracle: a program that duplicates a stack to a million items costs more than ten thousand ordinary ones, and its memory traffic does not scale across threads |
+| `--stack-limit N` | a case in which the stacks grow past N items is aborted and scored as no output; the line carries `:overflow true`. Not in the oracle: a program that duplicates a stack to a million items costs more than ten thousand ordinary ones, and its memory traffic does not scale across threads |
+| `--propeller-limits` | Propeller's value limits: strings and vectors truncated to 1000 elements when pushed. Not in the oracle |
+
+One limit is always on, in every mode: a run that creates more than 256 MB of strings, vectors and
+print output, or holds more than 2^27 stack items, is aborted the same way, and an EXEC item of more
+than 4 million nodes is not printed. Without this, one program could end the process, because
+`string_replace` can multiply a string's length in one step. The oracle has no such bound, so parity
+does not cover those programs.
 
 Cut programs and programs that stay under the limits get exactly the errors the unrestricted run
 gives (checked on six problems with several option combinations).
@@ -145,7 +152,7 @@ response repeats, and a malformed request gets `{:error "..."}` without stopping
 ```
 {:op :problem :name "gcd" :path "gcd.problem.edn"}             -> {:ok true :cases 40}
 {:op :eval :problem "gcd" :programs [(:in1 :in2 :integer_+) ...]
- :cap 5000 :screen [5 500000] :stack-limit 100000 :threads 8}  -> {:results [{:errors [...] :total ...} ...]}
+ :cap 5000 :screen [5 500000] :stack-limit 100000 :propeller-limits true :threads 8}  -> {:results [{:errors [...] :total ...} ...]}
 {:op :quit}
 ```
 
@@ -156,29 +163,54 @@ batch is the process start and reading the problem file: small for a 40-case pro
 ## Hindsight data
 
 A random program solves some problem: the one whose examples are its own inputs and outputs.
-`push3-fast hindsight` draws programs from an instruction alphabet, runs each on inputs sampled from a
-pool, and writes the program with the examples it produces: training data for a model that maps
-examples to programs.
+`push3-fast hindsight` draws programs the way Propeller draws its initial population, runs each on
+inputs sampled from a pool, and writes the program with the examples it produces: training data for
+a model that maps examples to programs.
 
 ```
 $ (cd oracle && clojure -M -m push3-fast-oracle.hindsight-spec gcd 1000 1 ../cases/gcd.spec.edn)
-$ push3-fast hindsight cases/gcd.spec.edn --n 200000 --seed 3 --examples 10 > gcd.hindsight.edn
-{:program (...) :examples [{:inputs [48 18] :output 6} ...]}
+$ push3-fast hindsight cases/gcd.spec.edn --n 200000 --seed 3 > gcd.hindsight.edn
+{:program (...) :plushy [...] :examples [{:inputs [48 18] :output 6} ...]}
 ```
 
-The spec (see `src/hindsight.rs`) holds the alphabet, the output kind and a pool of input tuples; the
-oracle script writes it from a Propeller problem, with the problem's own input generator for the pool.
-Programs are random trees (a sublist with probability 1/6 at each position, length 5 to 60 atoms by
-default, `--length LO:HI`). Options: `--min-examples M` (default 5: pool inputs are tried, up to
-3 times `--examples`, until K gave an output; a program with fewer than M is dropped), `--min-distinct D`
-(default 2: constant programs are dropped), `--stack-limit L` (default 100,000), `--seed`, `--threads`.
-The same seed gives the same file on any thread count.
+What follows Propeller:
 
-Checks: the programs of the generated files re-run on the oracle, every recorded output compared:
-gcd, small-or-large, mul3, find-pair, fizz-buzz and number-io, 38,000 examples, 0 mismatches except
-one program using `float_tan` (the last-digit libm class). Yield depends on the problem: 9% of the
-programs are kept on gcd, 6% on mul3, 4% on find-pair, 0.6% on small-or-large and fizz-buzz (random programs
-rarely leave a string behind). Speed on gcd: 200,000 programs in 6.0 s on one thread, 0.49 s on 20 threads.
+- The genome is a flat "plushy" of `rand-int max-initial-plushy-size` genes, each drawn uniformly
+  from the instruction list. It is written out as `:plushy`, a flat token sequence.
+- `plushy_to_program` is `plushy->push`, with Propeller's `opens` table under this interpreter's names
+  (identical to Propeller's own function on 5,000 random genomes; those genomes do not use the
+  `exec_do*`, `exec_print` and `vector_integer_iterate` openers, whose names differ or were left out).
+- Every ERC generator is one gene slot and gives a fresh value (from a pool of 1,000 drawn values).
+- The step limit, the genome size and the `close` gene come from the problem's Propeller file; the
+  spec script reads them there.
+- Strings and vectors are truncated to 1000 elements when pushed (`max-string-length`,
+  `max-vector-length`).
+
+What does not:
+
+- The instruction list is clj-push3's equivalent of Propeller's, and the instructions are clj-push3's.
+  Propeller's other limits (numbers to 1e6, `max-stack-items` 100 instead of 1000, code size) are not
+  applied.
+- A program that hits a value limit is dropped, so that every label holds on the oracle too (which has
+  no such limit). This drops at most 15 in 20,000 programs per problem.
+- A program must give at least `--min-examples` outputs (default 5; pool inputs are tried, up to 3
+  times `--examples`, until K gave one) and `--min-distinct` different ones (default 2). A circuit's
+  answer counts only when every output register was written.
+
+`--genome tree` draws random trees instead (the earlier behaviour). Other options: `--max-size S`,
+`--stack-limit L` (default 100,000), `--seed`, `--threads`. The same seed gives the same file on any
+thread count.
+
+Check (`scripts/hindsight-check-all.sh`): 20,000 programs per problem on all 31 problems; up to 300
+kept programs of each re-run on the oracle, every recorded output compared. 74,272 examples, 0
+mismatches, and 43 differences counted apart because the program uses sin, cos or tan (the script
+goes by the program's text; it does not establish that the function caused the difference).
+
+The share of programs kept depends on the problem, from 0.2% (square-digits) to 20% (snow-day). Two
+problems keep none with Propeller's settings. mul4: its genome size of 10 cannot write 8 registers;
+`--max-size 100` keeps 11% of the programs. shopping-list: its instruction set cannot read
+the input vectors (clj-push3 notes this; the set that can needs `vector_float`, which is not modelled
+here), so the outputs are constant.
 
 ## Prior work
 

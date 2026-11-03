@@ -1,9 +1,10 @@
 //! push3-fast names                       the implemented instruction names, one per line
 //! push3-fast run                         EDN cases on stdin, EDN results on stdout (one per line)
-//! push3-fast hindsight <spec.edn> [--n N] [--seed S] [--examples K] [--min-examples M] [--length LO:HI] [--min-distinct D]
+//! push3-fast hindsight <spec.edn> [--n N] [--seed S] [--genome plushy|tree] [--max-size S] [--examples K] [--min-examples M] [--length LO:HI] [--min-distinct D]
 //!                      [--stack-limit L] [--threads T]     random programs relabelled with their own outputs
+//! push3-fast plushy                     genomes on stdin (EDN vectors), the Propeller translation of each as a program
 //! push3-fast serve [--threads N]        long-running evaluator, one EDN request per line (see src/serve.rs)
-//! push3-fast eval <problem.edn> [--threads N] [--cap X] [--stack-limit N] [--screen K:X]
+//! push3-fast eval <problem.edn> [--threads N] [--cap X] [--stack-limit N] [--screen K:X] [--propeller-limits]
 //!                                        programs on stdin (one per line), one error vector per program
 //! push3-fast evaldiff <problem.edn> <programs.edn>   compare error vectors with the recorded oracle ones
 //! push3-fast evalprof <problem.edn> <programs.edn>   one thread: time per program, how much the slowest 10% cost
@@ -192,7 +193,7 @@ fn eval_args(args: &[String]) -> (push3_fast::eval::Problem, usize, push3_fast::
         (k.parse().expect("--screen K:X"), x.parse().expect("--screen K:X"))
     });
     let stack_limit = flag("--stack-limit").map_or(0, |v| v.parse().expect("--stack-limit N"));
-    (problem, threads, push3_fast::eval::Limits { cap, screen, stack_limit })
+    (problem, threads, push3_fast::eval::Limits { cap, screen, stack_limit, propeller_limits: args.iter().any(|a| a == "--propeller-limits") })
 }
 
 fn main() {
@@ -348,7 +349,13 @@ fn real_main() {
                 let (a, b) = v.split_once(':').expect("--length LO:HI");
                 (a.parse().expect("--length LO:HI"), b.parse().expect("--length LO:HI"))
             });
+            let genome = match flag("--genome").as_deref() {
+                None | Some("plushy") => push3_fast::hindsight::Genome::Plushy { max_size: num("--max-size", spec.max_size.unwrap_or(100)) },
+                Some("tree") => push3_fast::hindsight::Genome::Tree,
+                Some(g) => panic!("--genome plushy|tree, not {g}"),
+            };
             let params = push3_fast::hindsight::Params {
+                genome,
                 n: num("--n", 1000),
                 seed: num("--seed", 1) as u64,
                 examples: num("--examples", 10),
@@ -366,9 +373,20 @@ fn real_main() {
                 writeln!(out, "{l}").unwrap();
             }
             eprintln!(
-                "{} programs drawn, {} kept; dropped {} with fewer than {} examples, {} with fewer than {} distinct outputs; {:.2} s",
-                params.n, stats.kept, stats.too_few_outputs, params.min_examples, stats.too_uniform, params.min_distinct, t.elapsed().as_secs_f64()
+                "{} programs drawn, {} kept; dropped {} with fewer than {} examples, {} with fewer than {} distinct outputs, {} that hit a value limit; {:.2} s",
+                params.n, stats.kept, stats.too_few_outputs, params.min_examples, stats.too_uniform, params.min_distinct, stats.limit_hit, t.elapsed().as_secs_f64()
             );
+        }
+        // plushy: one genome (an EDN vector, `:close` for a close) per line on stdin, its program per line
+        Some("plushy") => {
+            for line in std::io::stdin().lock().lines() {
+                let line = line.expect("stdin");
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let genes: Vec<Item> = edn::parse(&line).expect("edn").items().expect("a vector").iter().map(|e| Item::from_edn(e).expect("gene")).collect();
+                println!("{}", push3_fast::hindsight::plushy_to_program(&genes).to_edn_string());
+            }
         }
         Some("serve") => {
             let threads = args.iter().position(|a| a == "--threads").and_then(|i| args.get(i + 1)).map(|v| v.parse().expect("--threads N"))
