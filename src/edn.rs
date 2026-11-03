@@ -85,7 +85,8 @@ impl<'a> Parser<'a> {
                         b'"' => out.push('"'),
                         b'\\' => out.push('\\'),
                         b'u' => {
-                            let hex = std::str::from_utf8(&self.b[self.pos..self.pos + 4]).map_err(|e| e.to_string())?;
+                            let digits = self.b.get(self.pos..self.pos + 4).ok_or("unterminated \\u escape")?;
+                            let hex = std::str::from_utf8(digits).map_err(|e| e.to_string())?;
                             self.pos += 4;
                             out.push(char::from_u32(u32::from_str_radix(hex, 16).map_err(|e| e.to_string())?).ok_or("bad \\u escape")?);
                         }
@@ -276,6 +277,8 @@ mod tests {
         assert_eq!(read(r#""ends in \"#), Err("unterminated escape".into()));
         assert!(read(r#""\é""#).is_err());
         assert!(read(r#""\q""#).is_err());
+        assert_eq!(read(r#""\u12"#), Err("unterminated \\u escape".into()));
+        assert_eq!(read(r#""\u"#), Err("unterminated \\u escape".into()));
     }
 
     #[test]

@@ -10,8 +10,7 @@ import push3_fast
 SMALL = """{:output :push/integer :error :numeric :max 100
             :cases [{:inputs [1] :output 2} {:inputs [5] :output 10}]}"""
 SPEC = """{:alphabet [:integer_+ :in1 1 2] :output :push/integer :max 100 :inputs [[1] [2] [3] [4] [5] [6]]}"""
-# reading this panics in the library (a slice past the end of the text): what a panic does is tested on it
-PANICS_THE_READER = '"\\u12'
+TRUNCATED_ESCAPE = '"\\u12'
 
 
 @pytest.mark.parametrize(
@@ -28,8 +27,8 @@ PANICS_THE_READER = '"\\u12'
         "#bad",
         "(1 $$ 2)",
         "(1) (2)",
-        PANICS_THE_READER,
-        "(" + PANICS_THE_READER,
+        TRUNCATED_ESCAPE,
+        "(" + TRUNCATED_ESCAPE,
     ],
 )
 def test_a_malformed_program_is_that_programs_error(bad):
@@ -42,7 +41,7 @@ def test_a_malformed_program_is_that_programs_error(bad):
 
 def test_a_batch_with_many_bad_programs_keeps_its_order():
     problem = push3_fast.Problem(SMALL)
-    programs = [PANICS_THE_READER if i % 3 == 0 else f"({i})" for i in range(90)]
+    programs = [TRUNCATED_ESCAPE if i % 3 == 0 else f"({i})" for i in range(90)]
     rows = problem.evaluate(programs, threads=4)
     assert ["error" in r for r in rows] == [i % 3 == 0 for i in range(90)]
     good = [r for r in rows if "error" not in r]
@@ -71,7 +70,7 @@ def test_programs_must_be_strings():
         "{:output :push/integer :error :numeric :max -1 :cases [{:inputs [] :output 1}]}",
         "{:output :push/output :num-outputs 9 :error :bitwise :cases [{:inputs [] :output [true]}]}",
         SPEC,
-        PANICS_THE_READER,
+        TRUNCATED_ESCAPE,
     ],
 )
 def test_a_bad_problem_is_a_value_error(bad):
@@ -116,7 +115,7 @@ def test_other_unreadable_files(tmp_path):
         "{:alphabet [:in1] :output :push/output :num-outputs 99 :inputs [[1]]}",
         "{:alphabet [:in1] :output :push/integer :max-initial-plushy-size -1 :inputs [[1]]}",
         "{:alphabet [:in1 {:a 1}] :output :push/integer :inputs [[1]]}",
-        PANICS_THE_READER,
+        TRUNCATED_ESCAPE,
     ],
 )
 def test_a_bad_spec_is_a_value_error(bad):
@@ -133,7 +132,7 @@ def test_bad_hindsight_arguments_are_value_errors(kwargs):
         push3_fast.hindsight(SPEC, n=10, **kwargs)
 
 
-@pytest.mark.parametrize("bad", ["", "(1", "5", "[:in1 {:a 1}]", PANICS_THE_READER])
+@pytest.mark.parametrize("bad", ["", "(1", "5", "[:in1 {:a 1}]", TRUNCATED_ESCAPE])
 def test_a_bad_genome_is_a_value_error(bad):
     with pytest.raises(ValueError):
         push3_fast.plushy_to_program(bad)
@@ -179,17 +178,10 @@ def test_a_panic_does_not_end_the_process_in_a_fresh_interpreter():
     code = f"""
 import push3_fast
 p = push3_fast.Problem({SMALL!r})
-bad = {PANICS_THE_READER!r}
-rows = p.evaluate([bad, "(:in1)"], threads=1)
-assert "panic" in rows[0]["error"], rows
-assert rows[1]["errors"] == [1.0, 5.0]
-for call in (lambda: push3_fast.Problem(bad), lambda: push3_fast.hindsight(bad), lambda: push3_fast.plushy_to_program(bad)):
-    try:
-        call()
-    except ValueError:
-        pass
-    else:
-        raise SystemExit("no ValueError")
+rows, read = push3_fast._panic_for_tests({SMALL!r}, 40, 4)
+assert all(("panic" in r) if i % 2 == 0 else r is None for i, r in enumerate(rows)), rows
+assert "panic" in read
+assert p.evaluate(["(:in1)"], threads=4)[0]["errors"] == [1.0, 5.0]
 print("alive")
 """
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)

@@ -89,8 +89,7 @@ fn on_big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, String> {
     })
 }
 
-/// A panic while reading text means the text is bad (the reader indexes past the end of a truncated
-/// `\u` escape, for one).
+/// A panic while reading text means the text is bad.
 fn reading<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|p| Err(format!("unreadable EDN: {}", panic_text(p))))
 }
@@ -155,12 +154,33 @@ fn parse_spec(text: &str) -> Result<Spec, String> {
 /// One program on one worker. A program that fails, in any way, is that program's row.
 fn evaluate_one(text: &str, prepared: &mut Prepared, limits: Limits) -> Result<Row, String> {
     // `Machine::reset` at the start of each case puts the worker's machine right after a panic
-    catch_unwind(AssertUnwindSafe(|| {
+    guarded(|| {
         check_depth(text, MAX_PROGRAM_DEPTH)?;
         let (program, _) = parse_program_line(text)?;
         Ok(prepared.evaluate(&program, limits))
-    }))
-    .unwrap_or_else(|p| Err(format!("internal panic: {}", panic_text(p))))
+    })
+}
+
+/// A panic while handling one program becomes that program's error.
+fn guarded<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|p| Err(format!("internal panic: {}", panic_text(p))))
+}
+
+/// For the tests only: no known input panics the library, so this panics on purpose, through the
+/// guards a real panic would meet. Even rows panic on a worker; returns each row's error (`None` for
+/// a row that ran) and the error of a panic while reading.
+#[pyfunction]
+fn _panic_for_tests(problem_edn: &str, rows: usize, threads: usize) -> PyResult<(Vec<Option<String>>, String)> {
+    let problem = CoreProblem::parse(problem_edn).map_err(value_error)?;
+    let results = parallel(&problem, rows, threads, |i, _| {
+        guarded(|| {
+            assert!(i % 2 == 1, "panic for a test");
+            Ok(())
+        })
+        .err()
+    });
+    let read = reading::<()>(|| panic!("panic for a test")).unwrap_err();
+    Ok((results, read))
 }
 
 fn evaluate_rows(py: Python<'_>, problem: &CoreProblem, programs: &[String], limits: Limits, threads: usize) -> PyResult<Vec<Result<Row, String>>> {
@@ -474,6 +494,7 @@ fn push3_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hindsight, m)?)?;
     m.add_function(wrap_pyfunction!(plushy_to_program, m)?)?;
     m.add_function(wrap_pyfunction!(names, m)?)?;
+    m.add_function(wrap_pyfunction!(_panic_for_tests, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
