@@ -62,14 +62,27 @@ pub struct Problem {
     output: Output,
     error: ErrKind,
     max: u64,
+    /// 0: no limit (the oracle's semantics)
+    pub stack_limit: usize,
     input_names: Vec<String>,
     cases: Vec<ProblemCase>,
+}
+
+/// Early exits. `cap`: stop as soon as the total error exceeds it. `screen`: `(k, x)` stops after
+/// the first `k` cases if the total error so far exceeds `x` (a cheap test for programs that are
+/// clearly bad, before paying for all cases; order the cases so the first ones are informative).
+#[derive(Clone, Copy, Default)]
+pub struct Limits {
+    pub cap: Option<f64>,
+    pub screen: Option<(usize, f64)>,
 }
 
 /// What evaluating one program gave.
 pub struct Row {
     pub errors: Vec<f64>,
     pub steps: u64,
+    /// Some case was aborted by the stack limit and scored as no output.
+    pub overflow: bool,
     /// The cap on the total error was reached and `errors` stops early.
     pub cut: bool,
 }
@@ -89,7 +102,7 @@ impl Row {
             fmt::pr_double(self.total()),
             self.solved(),
             self.steps,
-            if self.cut { " :cut true" } else { "" }
+            format!("{}{}", if self.overflow { " :overflow true" } else { "" }, if self.cut { " :cut true" } else { "" })
         )
     }
 }
@@ -169,7 +182,7 @@ impl Problem {
             let expected = expected_value(c.get("output").ok_or("case without :output")?)?;
             cases.push(ProblemCase { inputs, expected });
         }
-        Ok(Problem { output, error, max, input_names, cases })
+        Ok(Problem { output, error, max, stack_limit: 0, input_names, cases })
     }
 
     pub fn n_cases(&self) -> usize {
@@ -199,7 +212,7 @@ impl Problem {
     /// The inputs as `Item`s, for one thread.
     pub fn prepare(&self) -> Prepared<'_> {
         let inputs = self.cases.iter().map(|c| c.inputs.iter().map(|e| Item::from_edn(e).unwrap()).collect()).collect();
-        Prepared { problem: self, inputs }
+        Prepared { problem: self, inputs, machine: Machine::new(Item::List(std::rc::Rc::new(Vec::new())), Vec::new()) }
     }
 
     fn error(&self, expected: &Value, actual: &Value, out: &mut Vec<f64>) {
@@ -240,6 +253,9 @@ impl Problem {
 pub struct Prepared<'a> {
     problem: &'a Problem,
     inputs: Vec<Vec<Item>>,
+    /// One machine per thread, for all its programs: the stacks keep their capacity, so a program
+    /// that grows a stack to a million items does not page-fault fresh memory every time.
+    machine: Machine,
 }
 
 impl Prepared<'_> {
@@ -248,27 +264,30 @@ impl Prepared<'_> {
     }
 
     /// Runs `program` on every case. With `cap`, stops as soon as the total error exceeds it.
-    pub fn evaluate(&self, program: &Item, cap: Option<f64>) -> Row {
+    pub fn evaluate(&mut self, program: &Item, limits: Limits) -> Row {
         let p = self.problem;
-        let mut row = Row { errors: Vec::with_capacity(p.cases.len()), steps: 0, cut: false };
+        let mut row = Row { errors: Vec::with_capacity(p.cases.len()), steps: 0, overflow: false, cut: false };
         let mut total = 0.0;
-        let mut m = Machine::new(program.clone(), Vec::new());
-        for (c, inputs) in p.cases.iter().zip(&self.inputs) {
+        let m = &mut self.machine;
+        for (k, (c, inputs)) in p.cases.iter().zip(&self.inputs).enumerate() {
             m.reset(program, inputs);
+            m.stack_limit = if p.stack_limit == 0 { usize::MAX } else { p.stack_limit };
             for (name, v) in p.input_names.iter().zip(inputs) {
                 m.named.push((name.clone(), v.clone()));
             }
             m.run(p.max);
             row.steps += m.steps;
-            let actual = p.read_output(&m);
+            let actual = if m.overflowed { row.overflow = true; Value::Missing } else { p.read_output(m) };
             let before = row.errors.len();
             p.error(&c.expected, &actual, &mut row.errors);
             total += row.errors[before..].iter().sum::<f64>();
-            if cap.is_some_and(|cap| total > cap) {
+            let screened = limits.screen.is_some_and(|(n, x)| k + 1 == n && total > x);
+            if screened || limits.cap.is_some_and(|cap| total > cap) {
                 row.cut = true;
                 break;
             }
         }
+        m.trim();
         row
     }
 }
@@ -351,9 +370,9 @@ pub fn parse_program_line(line: &str) -> Result<(Item, Option<Vec<f64>>), String
 }
 
 /// Evaluates every line on `threads` threads; the result keeps the order of `lines`.
-pub fn evaluate_lines(problem: &Problem, lines: &[String], threads: usize, cap: Option<f64>) -> Vec<Result<Row, String>> {
+pub fn evaluate_lines(problem: &Problem, lines: &[String], threads: usize, limits: Limits) -> Vec<Result<Row, String>> {
     let next = AtomicUsize::new(0);
-    let chunk = 16;
+    let chunk = 1; // a program costs far more than the atomic counter, and a few programs cost 100x the rest
     let mut slots: Vec<Option<Result<Row, String>>> = (0..lines.len()).map(|_| None).collect();
     let results = std::sync::Mutex::new(&mut slots);
     std::thread::scope(|s| {
@@ -362,7 +381,7 @@ pub fn evaluate_lines(problem: &Problem, lines: &[String], threads: usize, cap: 
             std::thread::Builder::new()
                 .stack_size(1 << 28)
                 .spawn_scoped(s, || {
-                    let prepared = problem.prepare();
+                    let mut prepared = problem.prepare();
                     loop {
                     let start = next.fetch_add(chunk, Ordering::Relaxed);
                     if start >= lines.len() {
@@ -371,7 +390,7 @@ pub fn evaluate_lines(problem: &Problem, lines: &[String], threads: usize, cap: 
                     let end = (start + chunk).min(lines.len());
                     // programs are parsed here: Item is Rc-based, so it never crosses threads
                     let done: Vec<_> = (start..end)
-                        .map(|i| (i, parse_program_line(&lines[i]).map(|(p, _)| prepared.evaluate(&p, cap))))
+                        .map(|i| (i, parse_program_line(&lines[i]).map(|(p, _)| prepared.evaluate(&p, limits))))
                         .collect();
                     let mut g = results.lock().unwrap();
                     for (i, r) in done {
@@ -383,4 +402,64 @@ pub fn evaluate_lines(problem: &Problem, lines: &[String], threads: usize, cap: 
         }
     });
     slots.into_iter().map(|r| r.unwrap()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PROBLEM: &str = r#"{:output :push/integer :error :numeric :max 100
+        :cases [{:inputs [1] :output 2} {:inputs [5] :output 10} {:inputs [7] :output 14} {:inputs [9] :output 18}]}"#;
+
+    fn run(program: &str, limits: Limits) -> Row {
+        let p = Problem::parse(PROBLEM).unwrap();
+        let (prog, _) = parse_program_line(program).unwrap();
+        p.prepare().evaluate(&prog, limits)
+    }
+
+    #[test]
+    fn levenshtein_basics() {
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("same", "same"), 0);
+    }
+
+    #[test]
+    fn solved_program_has_zero_errors() {
+        let r = run("(:in1 2 :integer_*)", Limits::default());
+        assert_eq!(r.errors, vec![0.0; 4]);
+        assert!(!r.cut);
+    }
+
+    #[test]
+    fn empty_output_gets_the_penalty() {
+        let r = run("()", Limits::default());
+        assert_eq!(r.errors, vec![NO_OUTPUT_PENALTY; 4]);
+    }
+
+    #[test]
+    fn cap_and_screen_return_a_prefix() {
+        let full = run("(:in1)", Limits::default());
+        assert_eq!(full.errors, vec![1.0, 5.0, 7.0, 9.0]);
+        let capped = run("(:in1)", Limits { cap: Some(5.0), screen: None });
+        assert!(capped.cut);
+        assert_eq!(capped.errors, vec![1.0, 5.0]);
+        let screened = run("(:in1)", Limits { cap: None, screen: Some((1, 0.5)) });
+        assert!(screened.cut);
+        assert_eq!(screened.errors, vec![1.0]);
+        let passed = run("(:in1)", Limits { cap: None, screen: Some((1, 1.0)) });
+        assert!(!passed.cut);
+        assert_eq!(passed.errors.len(), 4);
+    }
+
+    #[test]
+    fn stack_limit_scores_the_case_as_no_output() {
+        let mut p = Problem::parse(PROBLEM).unwrap();
+        p.stack_limit = 50;
+        // 7 pushed 100 times by dup_times, then the limit is exceeded
+        let (prog, _) = parse_program_line("(7 100 :integer_dup_times)").unwrap();
+        let r = p.prepare().evaluate(&prog, Limits::default());
+        assert!(r.overflow);
+        assert_eq!(r.errors, vec![NO_OUTPUT_PENALTY; 4]);
+    }
 }

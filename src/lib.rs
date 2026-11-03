@@ -369,6 +369,11 @@ pub struct Machine {
     /// Set when the program touched behaviour this build does not model (so the run is not comparable).
     pub unsupported: bool,
     pub steps: u64,
+    /// Opt-in resource limit (not in the oracle): a run is aborted when a stack grows past this
+    /// many items through dup_items / dup_times. `usize::MAX` keeps the oracle's semantics.
+    pub stack_limit: usize,
+    /// Set when the run was aborted by `stack_limit`.
+    pub overflowed: bool,
 }
 
 const MAX_STACK_ITEMS: i64 = 1000;
@@ -456,6 +461,8 @@ impl Machine {
             named: Vec::new(),
             unsupported: false,
             steps: 0,
+            stack_limit: usize::MAX,
+            overflowed: false,
         }
     }
 
@@ -476,6 +483,26 @@ impl Machine {
         self.named.clear();
         self.unsupported = false;
         self.steps = 0;
+        self.overflowed = false;
+    }
+
+    /// Gives back the memory of stacks that grew past 4M items; smaller ones are kept for reuse.
+    pub fn trim(&mut self) {
+        const LIMIT: usize = 1 << 22;
+        macro_rules! trim {
+            ($v:expr) => {
+                if $v.capacity() > LIMIT {
+                    $v.shrink_to(1 << 10);
+                }
+            };
+        }
+        trim!(self.exec);
+        trim!(self.int);
+        trim!(self.boolean);
+        trim!(self.float);
+        trim!(self.chr);
+        trim!(self.string);
+        trim!(self.ivec);
     }
 
     /// Runs until the EXEC stack is empty or `max_steps` EXEC pops have happened.
@@ -610,6 +637,13 @@ impl Machine {
             Ty::Char => copies!(self.chr),
             Ty::Str => copies!(self.string),
             Ty::IntVec => copies!(self.ivec),
+        }
+    }
+
+    fn check_limit(&mut self, t: Ty) {
+        if self.len(t) > self.stack_limit {
+            self.overflowed = true;
+            self.exec.clear();
         }
     }
 
@@ -768,6 +802,7 @@ impl Machine {
                 let n = self.int.pop().unwrap();
                 if n > 0 {
                     self.push_copies_of_top(t, (n.min(MAX_STACK_ITEMS) - 1) as usize);
+                    self.check_limit(t);
                 } else {
                     self.pop_item(t);
                 }
@@ -783,6 +818,7 @@ impl Machine {
                     return;
                 }
                 self.dup_top_range(t, len - n as usize, len);
+                self.check_limit(t);
             }
             Fam::DeepDup => {
                 if !self.takes_index(t) {

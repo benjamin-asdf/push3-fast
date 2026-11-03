@@ -112,11 +112,29 @@ $ push3-fast eval cases/ev/fizz-buzz.problem.edn --threads 8 --cap 5000 < progra
 
 A problem file is `{:output :push/string :error :levenshtein :max 2000 :cases [{:inputs [...] :output ...}]}`
 (plus `:num-outputs` and `:input-names` for the circuits). A program line is the program or a map
-with `:program`. `--cap X` stops a program once its total error exceeds X (the line then ends in
-`:cut true` and the vector is partial). Parity: 500 random programs on each of the 31 problems,
-every error vector identical to the oracle's (programs using sin/cos/tan are counted apart).
-Throughput on small-or-large, 40 cases: 3,400 programs/s on one thread (99 M steps/s), 40,000 programs/s on 20 threads. `evalprof`, `opprof` and `slowstep` show where the time goes (a program that duplicates a stack of a million items costs more than ten thousand ordinary ones).
-`push3-fast evaldiff <problem> <programs>` is the comparison.
+with `:program`. Parity: 500 random programs on each of the 31 problems, every error vector
+identical to the oracle's (programs using sin/cos/tan are counted apart). `push3-fast evaldiff
+<problem> <programs>` is the comparison.
+
+Options, all off by default so that the results are exactly the oracle's:
+
+| Option | Effect |
+|---|---|
+| `--threads N` | worker threads (default: all hardware threads) |
+| `--cap X` | stop a program once its total error exceeds X; the line ends in `:cut true` and the vector is a prefix |
+| `--screen K:X` | after the first K cases, stop if the total error is above X: a cheap test that drops clearly bad programs before they pay for every case (order the cases so the first ones are informative) |
+| `--stack-limit N` | a case in which dup_items or dup_times grows a stack past N items is aborted and scored as no output; the line carries `:overflow true`. Not in the oracle: a program that duplicates a stack to a million items costs more than ten thousand ordinary ones, and its memory traffic does not scale across threads |
+
+Cut programs and programs that stay under the limits get exactly the errors the unrestricted run
+gives (checked on six problems with several option combinations).
+
+Measured on gcd, 500 random programs, one thread: 0.25 s without options, 0.04 s with
+`--screen 5:500000` (482 of the 500 programs are cut after five cases).
+
+Scaling (fizz-buzz, 40 cases, 20,000 programs; Intel Core i5-14600: 6 performance cores with two
+threads each plus 8 efficiency cores, 20 hardware threads): 3,000 programs/s on one thread, 17,000 on
+6 threads (5.8x), 37,000 on 20 threads (12.5x). `evalprof`, `opprof` and `slowstep` show where
+the time goes.
 
 ## Prior work
 

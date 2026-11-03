@@ -1,6 +1,6 @@
 //! push3-fast names                       the implemented instruction names, one per line
 //! push3-fast run                         EDN cases on stdin, EDN results on stdout (one per line)
-//! push3-fast eval <problem.edn> [--threads N] [--cap X]
+//! push3-fast eval <problem.edn> [--threads N] [--cap X] [--stack-limit N] [--screen K:X]
 //!                                        programs on stdin (one per line), one error vector per program
 //! push3-fast evaldiff <problem.edn> <programs.edn>   compare error vectors with the recorded oracle ones
 //! push3-fast evalprof <problem.edn> <programs.edn>   one thread: time per program, how much the slowest 10% cost
@@ -176,7 +176,7 @@ fn load(path: &str) -> Vec<Case> {
     cases
 }
 
-fn eval_args(args: &[String]) -> (push3_fast::eval::Problem, usize, Option<f64>) {
+fn eval_args(args: &[String]) -> (push3_fast::eval::Problem, usize, push3_fast::eval::Limits) {
     let text = std::fs::read_to_string(args.get(2).expect("problem.edn")).expect("problem.edn");
     let problem = push3_fast::eval::Problem::parse(&text).unwrap_or_else(|e| panic!("problem.edn: {e}"));
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
@@ -184,7 +184,13 @@ fn eval_args(args: &[String]) -> (push3_fast::eval::Problem, usize, Option<f64>)
         .map(|v| v.parse().expect("--threads N"))
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
     let cap = flag("--cap").map(|v| v.parse().expect("--cap X"));
-    (problem, threads, cap)
+    let screen = flag("--screen").map(|v| {
+        let (k, x) = v.split_once(':').expect("--screen K:X");
+        (k.parse().expect("--screen K:X"), x.parse().expect("--screen K:X"))
+    });
+    let mut problem = problem;
+    problem.stack_limit = flag("--stack-limit").map_or(0, |v| v.parse().expect("--stack-limit N"));
+    (problem, threads, push3_fast::eval::Limits { cap, screen })
 }
 
 fn main() {
@@ -245,14 +251,14 @@ fn real_main() {
         Some("evalprof") => {
             let (problem, _, _) = eval_args(&args);
             let lines: Vec<String> = std::fs::read_to_string(args.get(3).expect("programs.edn")).unwrap().lines().map(String::from).collect();
-            let prepared = problem.prepare();
+            let mut prepared = problem.prepare();
             let mut rows: Vec<(f64, u64, usize)> = Vec::new();
             let t0 = Instant::now();
             let parsed: Vec<_> = lines.iter().map(|l| push3_fast::eval::parse_program_line(l).unwrap().0).collect();
             let parse_s = t0.elapsed().as_secs_f64();
             for (i, p) in parsed.iter().enumerate() {
                 let t = Instant::now();
-                let r = prepared.evaluate(p, None);
+                let r = prepared.evaluate(p, Default::default());
                 rows.push((t.elapsed().as_secs_f64(), r.steps, i));
             }
             let total: f64 = rows.iter().map(|r| r.0).sum();
@@ -297,7 +303,7 @@ fn real_main() {
         Some("opprof") => {
             let (problem, _, _) = eval_args(&args);
             let lines: Vec<String> = std::fs::read_to_string(args.get(3).unwrap()).unwrap().lines().map(String::from).collect();
-            let prepared = problem.prepare();
+            let mut prepared = problem.prepare();
             let overhead = {
                 let t = Instant::now();
                 for _ in 0..1_000_000 { std::hint::black_box(Instant::now().elapsed()); }
@@ -352,7 +358,7 @@ fn real_main() {
                 .map(String::from)
                 .collect();
             let t = Instant::now();
-            let rows = push3_fast::eval::evaluate_lines(&problem, &lines, threads, None);
+            let rows = push3_fast::eval::evaluate_lines(&problem, &lines, threads, Default::default());
             let dt = t.elapsed().as_secs_f64();
             let (mut bad, mut trig, mut steps) = (0, 0, 0u64);
             for (i, (line, r)) in lines.iter().zip(&rows).enumerate() {
