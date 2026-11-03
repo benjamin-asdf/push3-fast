@@ -8,6 +8,8 @@
 pub mod edn;
 pub mod eval;
 pub mod fmt;
+pub mod hindsight;
+pub mod serve;
 pub mod strings;
 pub mod vectors;
 

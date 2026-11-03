@@ -1,5 +1,8 @@
 //! push3-fast names                       the implemented instruction names, one per line
 //! push3-fast run                         EDN cases on stdin, EDN results on stdout (one per line)
+//! push3-fast hindsight <spec.edn> [--n N] [--seed S] [--examples K] [--min-examples M] [--length LO:HI] [--min-distinct D]
+//!                      [--stack-limit L] [--threads T]     random programs relabelled with their own outputs
+//! push3-fast serve [--threads N]        long-running evaluator, one EDN request per line (see src/serve.rs)
 //! push3-fast eval <problem.edn> [--threads N] [--cap X] [--stack-limit N] [--screen K:X]
 //!                                        programs on stdin (one per line), one error vector per program
 //! push3-fast evaldiff <problem.edn> <programs.edn>   compare error vectors with the recorded oracle ones
@@ -188,9 +191,8 @@ fn eval_args(args: &[String]) -> (push3_fast::eval::Problem, usize, push3_fast::
         let (k, x) = v.split_once(':').expect("--screen K:X");
         (k.parse().expect("--screen K:X"), x.parse().expect("--screen K:X"))
     });
-    let mut problem = problem;
-    problem.stack_limit = flag("--stack-limit").map_or(0, |v| v.parse().expect("--stack-limit N"));
-    (problem, threads, push3_fast::eval::Limits { cap, screen })
+    let stack_limit = flag("--stack-limit").map_or(0, |v| v.parse().expect("--stack-limit N"));
+    (problem, threads, push3_fast::eval::Limits { cap, screen, stack_limit })
 }
 
 fn main() {
@@ -336,6 +338,42 @@ fn real_main() {
             for (k, (t, n)) in v.iter().take(18) {
                 println!("{k:34} {:5.1}% of time {n:9} calls {:8.0} ns/call", t / total * 100.0, t / *n as f64);
             }
+        }
+        Some("hindsight") => {
+            let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+            let num = |name: &str, default: usize| flag(name).map_or(default, |v| v.parse().unwrap_or_else(|_| panic!("{name} N")));
+            let spec = push3_fast::hindsight::Spec::parse(&std::fs::read_to_string(args.get(2).expect("spec.edn")).expect("spec.edn"))
+                .unwrap_or_else(|e| panic!("spec.edn: {e}"));
+            let (lo, hi) = flag("--length").map_or((5, 60), |v| {
+                let (a, b) = v.split_once(':').expect("--length LO:HI");
+                (a.parse().expect("--length LO:HI"), b.parse().expect("--length LO:HI"))
+            });
+            let params = push3_fast::hindsight::Params {
+                n: num("--n", 1000),
+                seed: num("--seed", 1) as u64,
+                examples: num("--examples", 10),
+                min_examples: num("--min-examples", 5),
+                length: (lo, hi),
+                min_distinct: num("--min-distinct", 2),
+                stack_limit: num("--stack-limit", 100_000),
+                threads: num("--threads", std::thread::available_parallelism().map_or(1, |n| n.get())),
+            };
+            let t = Instant::now();
+            let (lines, stats) = push3_fast::hindsight::generate(&spec, &params);
+            let stdout = std::io::stdout();
+            let mut out = std::io::BufWriter::new(stdout.lock());
+            for l in &lines {
+                writeln!(out, "{l}").unwrap();
+            }
+            eprintln!(
+                "{} programs drawn, {} kept; dropped {} with fewer than {} examples, {} with fewer than {} distinct outputs; {:.2} s",
+                params.n, stats.kept, stats.too_few_outputs, params.min_examples, stats.too_uniform, params.min_distinct, t.elapsed().as_secs_f64()
+            );
+        }
+        Some("serve") => {
+            let threads = args.iter().position(|a| a == "--threads").and_then(|i| args.get(i + 1)).map(|v| v.parse().expect("--threads N"))
+                .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
+            push3_fast::serve::serve(threads);
         }
         Some("eval") => {
             let (problem, threads, cap) = eval_args(&args);

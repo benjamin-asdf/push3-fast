@@ -136,6 +136,50 @@ threads each plus 8 efficiency cores, 20 hardware threads): 3,000 programs/s on 
 6 threads (5.8x), 37,000 on 20 threads (12.5x). `evalprof`, `opprof` and `slowstep` show where
 the time goes.
 
+### Server mode
+
+`push3-fast serve [--threads N]` keeps the process and the loaded problems alive. One request per
+line on stdin (an EDN map), one response per line on stdout; a request may carry an `:id` that the
+response repeats, and a malformed request gets `{:error "..."}` without stopping the server.
+
+```
+{:op :problem :name "gcd" :path "gcd.problem.edn"}             -> {:ok true :cases 40}
+{:op :eval :problem "gcd" :programs [(:in1 :in2 :integer_+) ...]
+ :cap 5000 :screen [5 500000] :stack-limit 100000 :threads 8}  -> {:results [{:errors [...] :total ...} ...]}
+{:op :quit}
+```
+
+The rows are those of `eval` (checked identical on 500 programs). The saving over one process per
+batch is the process start and reading the problem file: small for a 40-case problem (2.2 ms against
+2.8 ms for a batch of 32 programs), larger for problems with many cases.
+
+## Hindsight data
+
+A random program solves some problem: the one whose examples are its own inputs and outputs.
+`push3-fast hindsight` draws programs from an instruction alphabet, runs each on inputs sampled from a
+pool, and writes the program with the examples it produces: training data for a model that maps
+examples to programs.
+
+```
+$ (cd oracle && clojure -M -m push3-fast-oracle.hindsight-spec gcd 1000 1 ../cases/gcd.spec.edn)
+$ push3-fast hindsight cases/gcd.spec.edn --n 200000 --seed 3 --examples 10 > gcd.hindsight.edn
+{:program (...) :examples [{:inputs [48 18] :output 6} ...]}
+```
+
+The spec (see `src/hindsight.rs`) holds the alphabet, the output kind and a pool of input tuples; the
+oracle script writes it from a Propeller problem, with the problem's own input generator for the pool.
+Programs are random trees (a sublist with probability 1/6 at each position, length 5 to 60 atoms by
+default, `--length LO:HI`). Options: `--min-examples M` (default 5: pool inputs are tried, up to
+3 times `--examples`, until K gave an output; a program with fewer than M is dropped), `--min-distinct D`
+(default 2: constant programs are dropped), `--stack-limit L` (default 100,000), `--seed`, `--threads`.
+The same seed gives the same file on any thread count.
+
+Checks: the programs of the generated files re-run on the oracle, every recorded output compared:
+gcd, small-or-large, mul3, find-pair, fizz-buzz and number-io, 38,000 examples, 0 mismatches except
+one program using `float_tan` (the last-digit libm class). Yield depends on the problem: 9% of the
+programs are kept on gcd, 6% on mul3, 4% on find-pair, 0.6% on small-or-large and fizz-buzz (random programs
+rarely leave a string behind). Speed on gcd: 200,000 programs in 6.0 s on one thread, 0.49 s on 20 threads.
+
 ## Prior work
 
 Push is Lee Spector's language; the specification is the

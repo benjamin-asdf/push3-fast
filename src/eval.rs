@@ -62,8 +62,6 @@ pub struct Problem {
     output: Output,
     error: ErrKind,
     max: u64,
-    /// 0: no limit (the oracle's semantics)
-    pub stack_limit: usize,
     input_names: Vec<String>,
     cases: Vec<ProblemCase>,
 }
@@ -75,6 +73,8 @@ pub struct Problem {
 pub struct Limits {
     pub cap: Option<f64>,
     pub screen: Option<(usize, f64)>,
+    /// 0: none (the oracle's semantics). See the README, `--stack-limit`.
+    pub stack_limit: usize,
 }
 
 /// What evaluating one program gave.
@@ -135,7 +135,10 @@ fn expected_value(e: &Edn) -> Result<Value, String> {
 
 impl Problem {
     pub fn parse(text: &str) -> Result<Problem, String> {
-        let e = edn::parse(text)?;
+        Problem::from_edn(&edn::parse(text)?)
+    }
+
+    pub fn from_edn(e: &Edn) -> Result<Problem, String> {
         let out = keyword(e.get("output"), ":output")?;
         let num_outputs = match e.get("num-outputs") {
             Some(Edn::Int(n)) => *n as usize,
@@ -151,7 +154,9 @@ impl Problem {
             "push/output" => Output::Regs(num_outputs),
             o => return Err(format!("unknown :output {o}")),
         };
-        let error = match keyword(e.get("error"), ":error")?.as_str() {
+        // a hindsight spec has an :inputs pool and no :cases; its :error is never used
+        let spec = e.get("cases").is_none();
+        let error = match if spec { "exact".to_string() } else { keyword(e.get("error"), ":error")? }.as_str() {
             "numeric" => ErrKind::Numeric,
             "levenshtein" => ErrKind::Levenshtein,
             "exact" => ErrKind::Exact,
@@ -175,14 +180,22 @@ impl Problem {
             None => Vec::new(),
         };
         let mut cases = Vec::new();
-        for c in e.get("cases").and_then(|c| c.items()).ok_or("missing :cases")? {
-            let inputs = c.get("inputs").and_then(|i| i.items()).ok_or("case without :inputs")?.to_vec();
-            // fail on unreadable inputs at load time, not in a worker
-            inputs.iter().map(Item::from_edn).collect::<Result<Vec<_>, _>>()?;
-            let expected = expected_value(c.get("output").ok_or("case without :output")?)?;
-            cases.push(ProblemCase { inputs, expected });
+        if spec {
+            for tuple in e.get("inputs").and_then(|c| c.items()).ok_or("missing :cases (or an :inputs pool)")? {
+                let inputs = tuple.items().ok_or("an input tuple must be a vector")?.to_vec();
+                inputs.iter().map(Item::from_edn).collect::<Result<Vec<_>, _>>()?;
+                cases.push(ProblemCase { inputs, expected: Value::Missing });
+            }
+        } else {
+            for c in e.get("cases").and_then(|c| c.items()).ok_or("missing :cases")? {
+                let inputs = c.get("inputs").and_then(|i| i.items()).ok_or("case without :inputs")?.to_vec();
+                // fail on unreadable inputs at load time, not in a worker
+                inputs.iter().map(Item::from_edn).collect::<Result<Vec<_>, _>>()?;
+                let expected = expected_value(c.get("output").ok_or("case without :output")?)?;
+                cases.push(ProblemCase { inputs, expected });
+            }
         }
-        Ok(Problem { output, error, max, stack_limit: 0, input_names, cases })
+        Ok(Problem { output, error, max, input_names, cases })
     }
 
     pub fn n_cases(&self) -> usize {
@@ -258,7 +271,51 @@ pub struct Prepared<'a> {
     machine: Machine,
 }
 
+impl Value {
+    /// EDN text; `None` when there was no output.
+    fn to_edn(&self) -> Option<String> {
+        Some(match self {
+            Value::Int(i) => i.to_string(),
+            Value::Float(f) => fmt::pr_double(*f),
+            Value::Bool(b) => b.to_string(),
+            Value::Str(s) => fmt::pr_string(s),
+            Value::Pair(a, b) => format!("[{a} {b}]"),
+            Value::Bits(bits) => format!(
+                "[{}]",
+                bits.iter().map(|b| b.map_or("nil".to_string(), |b| b.to_string())).collect::<Vec<_>>().join(" ")
+            ),
+            Value::Missing => return None,
+        })
+    }
+}
+
 impl Prepared<'_> {
+    /// Runs `program` on case `case` and returns the output as EDN text, or `None` if the program
+    /// left no output (or was aborted by `stack_limit`, 0 = none).
+    pub fn output_of(&mut self, program: &Item, case: usize, stack_limit: usize) -> Option<String> {
+        let p = self.problem;
+        let m = &mut self.machine;
+        m.reset(program, &self.inputs[case]);
+        m.stack_limit = if stack_limit == 0 { usize::MAX } else { stack_limit };
+        for (name, v) in p.input_names.iter().zip(&self.inputs[case]) {
+            m.named.push((name.clone(), v.clone()));
+        }
+        m.run(p.max);
+        let v = if m.overflowed { Value::Missing } else { p.read_output(m) };
+        m.trim();
+        // a circuit's answer counts only when every output register was written
+        if matches!(&v, Value::Bits(b) if b.iter().any(|x| x.is_none())) {
+            return None;
+        }
+        v.to_edn()
+    }
+
+    /// The pool entry `case` as EDN text.
+    pub fn case_text(&self, case: usize) -> String {
+        let t: Vec<String> = self.problem.cases[case].inputs.iter().map(edn::edn_text).collect();
+        format!("[{}]", t.join(" "))
+    }
+
     pub fn case_inputs(&self) -> &[Vec<Item>] {
         &self.inputs
     }
@@ -271,7 +328,7 @@ impl Prepared<'_> {
         let m = &mut self.machine;
         for (k, (c, inputs)) in p.cases.iter().zip(&self.inputs).enumerate() {
             m.reset(program, inputs);
-            m.stack_limit = if p.stack_limit == 0 { usize::MAX } else { p.stack_limit };
+            m.stack_limit = if limits.stack_limit == 0 { usize::MAX } else { limits.stack_limit };
             for (name, v) in p.input_names.iter().zip(inputs) {
                 m.named.push((name.clone(), v.clone()));
             }
@@ -369,39 +426,51 @@ pub fn parse_program_line(line: &str) -> Result<(Item, Option<Vec<f64>>), String
     }
 }
 
-/// Evaluates every line on `threads` threads; the result keeps the order of `lines`.
-pub fn evaluate_lines(problem: &Problem, lines: &[String], threads: usize, limits: Limits) -> Vec<Result<Row, String>> {
+/// Runs `f(i, prepared)` for i in 0..n on `threads` threads and returns the results in order.
+/// `f` builds its `Item`s on the worker thread: Item is Rc-based, so it never crosses threads (what
+/// crosses is text or `Edn`).
+pub fn parallel<T, F>(problem: &Problem, n: usize, threads: usize, f: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(usize, &mut Prepared) -> T + Sync,
+{
     let next = AtomicUsize::new(0);
-    let chunk = 1; // a program costs far more than the atomic counter, and a few programs cost 100x the rest
-    let mut slots: Vec<Option<Result<Row, String>>> = (0..lines.len()).map(|_| None).collect();
+    let mut slots: Vec<Option<T>> = (0..n).map(|_| None).collect();
     let results = std::sync::Mutex::new(&mut slots);
     std::thread::scope(|s| {
-        for _ in 0..threads.max(1) {
+        for _ in 0..threads.max(1).min(n.max(1)) {
             // exec_y and friends nest deeply: parsing and dropping need a big stack
             std::thread::Builder::new()
                 .stack_size(1 << 28)
                 .spawn_scoped(s, || {
                     let mut prepared = problem.prepare();
+                    // a program costs far more than the atomic counter, and a few programs cost 100x the rest
                     loop {
-                    let start = next.fetch_add(chunk, Ordering::Relaxed);
-                    if start >= lines.len() {
-                        break;
-                    }
-                    let end = (start + chunk).min(lines.len());
-                    // programs are parsed here: Item is Rc-based, so it never crosses threads
-                    let done: Vec<_> = (start..end)
-                        .map(|i| (i, parse_program_line(&lines[i]).map(|(p, _)| prepared.evaluate(&p, limits))))
-                        .collect();
-                    let mut g = results.lock().unwrap();
-                    for (i, r) in done {
-                        g[i] = Some(r);
-                    }
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        if i >= n {
+                            break;
+                        }
+                        let r = f(i, &mut prepared);
+                        results.lock().unwrap()[i] = Some(r);
                     }
                 })
                 .unwrap();
         }
     });
     slots.into_iter().map(|r| r.unwrap()).collect()
+}
+
+/// Evaluates `n` programs; `program(i)` builds program `i` on the worker thread.
+pub fn evaluate_batch<F>(problem: &Problem, n: usize, threads: usize, limits: Limits, program: F) -> Vec<Result<Row, String>>
+where
+    F: Fn(usize) -> Result<Item, String> + Sync,
+{
+    parallel(problem, n, threads, |i, prepared| program(i).map(|p| prepared.evaluate(&p, limits)))
+}
+
+/// `evaluate_batch` on program lines (the program or a map with `:program`).
+pub fn evaluate_lines(problem: &Problem, lines: &[String], threads: usize, limits: Limits) -> Vec<Result<Row, String>> {
+    evaluate_batch(problem, lines.len(), threads, limits, |i| parse_program_line(&lines[i]).map(|(p, _)| p))
 }
 
 #[cfg(test)]
@@ -441,24 +510,23 @@ mod tests {
     fn cap_and_screen_return_a_prefix() {
         let full = run("(:in1)", Limits::default());
         assert_eq!(full.errors, vec![1.0, 5.0, 7.0, 9.0]);
-        let capped = run("(:in1)", Limits { cap: Some(5.0), screen: None });
+        let capped = run("(:in1)", Limits { cap: Some(5.0), ..Limits::default() });
         assert!(capped.cut);
         assert_eq!(capped.errors, vec![1.0, 5.0]);
-        let screened = run("(:in1)", Limits { cap: None, screen: Some((1, 0.5)) });
+        let screened = run("(:in1)", Limits { screen: Some((1, 0.5)), ..Limits::default() });
         assert!(screened.cut);
         assert_eq!(screened.errors, vec![1.0]);
-        let passed = run("(:in1)", Limits { cap: None, screen: Some((1, 1.0)) });
+        let passed = run("(:in1)", Limits { screen: Some((1, 1.0)), ..Limits::default() });
         assert!(!passed.cut);
         assert_eq!(passed.errors.len(), 4);
     }
 
     #[test]
     fn stack_limit_scores_the_case_as_no_output() {
-        let mut p = Problem::parse(PROBLEM).unwrap();
-        p.stack_limit = 50;
+        let p = Problem::parse(PROBLEM).unwrap();
         // 7 pushed 100 times by dup_times, then the limit is exceeded
         let (prog, _) = parse_program_line("(7 100 :integer_dup_times)").unwrap();
-        let r = p.prepare().evaluate(&prog, Limits::default());
+        let r = p.prepare().evaluate(&prog, Limits { stack_limit: 50, ..Limits::default() });
         assert!(r.overflow);
         assert_eq!(r.errors, vec![NO_OUTPUT_PENALTY; 4]);
     }
